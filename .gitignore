@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+switches.yaml
+diagnose_*.txt

@@ -1,0 +1,13 @@
+switches:
+  centro_stella:
+    host: 10.168.13.100
+    user: admin
+    password: CHANGEME
+    model: "Aruba 2930M-24G"
+    location: "R1 - Centro Stella"
+  r2:
+    host: 10.168.13.201
+    user: admin
+    password: CHANGEME
+    model: "Aruba 2930F"
+    location: "R2"
