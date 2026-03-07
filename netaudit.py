@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""netaudit — Tool di diagnostica e gestione switch Aruba."""
+"""netaudit — Tool di diagnostica e gestione switch di rete (multi-vendor via netmiko)."""
 
 import argparse
 import os
@@ -8,7 +8,7 @@ import textwrap
 
 import yaml
 
-from lib.switch import ArubaSwitch
+from lib.switch import Switch
 from lib import diagnostics, modifications
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -341,7 +341,7 @@ def main():
 
     print(f"Connessione a {sw_config['host']}...")
     try:
-        with ArubaSwitch(**sw_config) as sw:
+        with Switch(**sw_config) as sw:
             print(f"Connesso a {sw.hostname}\n")
             handler(sw, args)
     except ConnectionError as e:

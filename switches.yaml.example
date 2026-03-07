@@ -3,11 +3,13 @@ switches:
     host: 10.168.13.100
     user: admin
     password: CHANGEME
+    device_type: aruba_osswitch   # aruba_osswitch | hp_procurve | hp_comware | fiberstore_fsos | tplink_jetstream | netgear_prosafe
     model: "Aruba 2930M-24G"
     location: "R1 - Centro Stella"
   r2:
     host: 10.168.13.201
     user: admin
     password: CHANGEME
-    model: "Aruba 2930F"
+    device_type: hp_procurve
+    model: "HP 2530-48G-PoE"
     location: "R2"
