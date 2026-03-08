@@ -1,4 +1,13 @@
+# Virtual environments
+.venv/
 __pycache__/
 *.pyc
+
+# Local configuration
 switches.yaml
+
+# Diagnostic reports
 diagnose_*.txt
+
+# Nmap scan data (potentially sensitive)
+nmap-output.xml

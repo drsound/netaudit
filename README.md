@@ -1,232 +1,175 @@
 # netaudit — Network Switch Diagnostic and Configuration Tool
 
-## Dependencies
+`netaudit` is a robust, multi-vendor CLI tool designed to simplify everyday network switch operations, diagnostics, and inventory management. By leveraging `netmiko` and an intelligent Nmap XML database integration, it provides an expressive and safe way to query infrastructure, apply configuration changes, and analyze topology health.
 
+---
+
+## Key Features
+
+- **Multi-Vendor Support**: Out-of-the-box support for Aruba, HP ProCurve, HP Comware, Fiberstore (FS), TP-Link JetStream, and Netgear switches via Netmiko adapters.
+- **Deep Network Diagnostics**: Perform advanced STP analysis (Edge anomalies, Root Guard checks), interface level physical checks (Speed mismatches, SFP DDMI), and intelligent log auditing for flapping ports and correlated config changes.
+- **Automated Rogue Device Detection**: Easily locate unmanaged hubs or rogue devices connected to non-edge ports using a single command.
+- **Safe Configuration Modifications**: Write commands follow a strict Preview-Confirm-Execute-Verify workflow, preventing accidental network outages.
+- **Nmap Database Integration**: Overlay live switch MAC address tables with deep Nmap scan data (IP resolving, OS fingerprinting, open services lists).
+- **CI/CD & Export Ready**: Global standard CSV export capabilities and non-interactive `--yes` flags make `netaudit` ideal for scripting, documentation dumping, or integration with automation loops.
+
+---
+
+## Prerequisites & Installation
+
+**Prerequisites:**
+- Python 3.8+
+- Network access to the management interfaces of your networking equipment.
+
+**Installation:**
 ```bash
+# Clone the repository
+git clone https://github.com/your-username/netaudit.git
+cd netaudit
+
+# Install required Python dependencies
 pip install netmiko pyyaml
 ```
 
-## Switch Configuration
+---
 
-Edit `switches.yaml` to add/modify switch entries:
+## Configuration
 
+Switches are defined in `switches.yaml`. You can copy the template to get started:
+```bash
+cp switches.yaml.example switches.yaml
+```
+
+**Example `switches.yaml` entries:**
 ```yaml
 switches:
-  centro_stella:
-    host: 10.168.13.100
+  core_switch:
+    host: 192.168.1.100
     user: admin
-    password: sid1963fio
-    model: "Aruba 2930M-24G"
-    location: "R1 - Centro Stella"
-  r2:
-    host: 10.168.13.201
-    user: admin
-    password: ...
-    model: "Aruba 2930F"
-    location: "R2"
+    password: mySecretPassword
+    device_type: aruba_osswitch   
+    expected_root_mac: "00:11:22:33:44:55"
 ```
 
-Alternatively, you can pass credentials directly in the CLI:
+### SSH Public Key Authentication
+`netaudit` fully supports SSH public key authentication. If you omit the `password` field from your `switches.yaml` definition (or the `--password` CLI argument), the tool will automatically attempt to authenticate using your standard SSH keys (e.g., `~/.ssh/id_rsa` or `ssh-agent`).
 
+Alternatively, if you prefer not to use the YAML inventory, you can pass connection arguments directly via CLI:
 ```bash
-python3 netaudit.py --host 10.168.13.100 --user admin --password SECRET vlans
-```
-
-## File Structure
-
-```
-netaudit/
-├── netaudit.py        # CLI Entry Point
-├── switches.yaml      # Switch inventory and credentials
-├── README.md
-└── lib/
-    ├── switch.py          # Switch class (netmiko adapter)
-    ├── diagnostics.py     # Read and analysis operations
-    ├── modifications.py   # Write operations with safety guardrails
-    └── nmap_parser.py     # Nmap XML parser for host database integration
+python3 netaudit.py --host 192.168.1.100 --user admin --password secret vlans
+python3 netaudit.py --host 192.168.1.100 --user admin vlans  # Falls back to SSH Key Auth
 ```
 
 ---
 
-## Read Commands
+## Usage Guide
+
+`netaudit` provides various command families tailored for both quick checks and extensive infrastructure refactoring.
+
+### 1. Read Operations & Diagnostics
 
 ```bash
 # Full diagnosis: runs all read commands and saves a timestamped report
-# (saved as diagnose_<hostname>_<timestamp>.txt in the current directory)
 python3 netaudit.py --switch core_switch diagnose
 
-# Full running configuration
+# Display raw running configuration
 python3 netaudit.py --switch core_switch config
 
-# Arbitrary query command execution
-python3 netaudit.py --switch core_switch query "show ip routing"
-
-# List all VLANs
+# General read queries
 python3 netaudit.py --switch core_switch vlans
-
-# Specific VLAN detail
 python3 netaudit.py --switch core_switch vlan 2
+python3 netaudit.py --switch core_switch ports
+python3 netaudit.py --switch core_switch port-names       # Fetch all interface descriptions
+python3 netaudit.py --switch core_switch neighbors        # Map LLDP topology
 
-# Spanning Tree (full output)
-python3 netaudit.py --switch core_switch stp
+# Execute arbitrary "show" commands
+python3 netaudit.py --switch core_switch query "show ip routing"
+```
 
-# Basic STP analysis (TC count, blocking ports, root bridge info)
+**Advanced Diagnostics:**
+```bash
+# Spanning Tree analysis (TC events, blocking ports, topology root)
 python3 netaudit.py --switch core_switch stp check
 
-# Advanced/Deep STP analysis (Root Guard, TCN Guard, Edge vs OperEdge, expected root)
+# Deep STP structural analysis (Root Guard, TCN Guard, Edge vs OperEdge mismatches)
 python3 netaudit.py --switch core_switch stp detail
 
-# Port status (interface brief)
-python3 netaudit.py --switch core_switch ports
-
-# Physical layer anomaly check (speed mismatches, MDIX, SFP diagnostics)
+# Detect anomalies in physical media (speed mismatches, MDIX, Transceiver health)
 python3 netaudit.py --switch core_switch physical-check
 
-# Port names/comments
-python3 netaudit.py --switch core_switch port-names
-python3 netaudit.py --switch core_switch port-names 2/24   # only one port
-
-# MAC address table (can be filtered by port and/or VLAN)
-python3 netaudit.py --switch core_switch macs
-python3 netaudit.py --switch core_switch macs --port 2/14
-python3 netaudit.py --switch core_switch macs --vlan 2
-python3 netaudit.py --switch core_switch macs --port 2/14 --vlan 2
-
-# LLDP neighbors (topology)
-python3 netaudit.py --switch core_switch neighbors
-
-# System logs (reverse chronological order)
-python3 netaudit.py --switch core_switch logs
-
-# Intelligent Log Analysis (detects STP root changes, port flapping loops, config correlations)
+# Audit log streams over time for loops, flapping events, and topology changes
 python3 netaudit.py --switch core_switch log-audit
 ```
 
----
+### 2. Modifying Configurations
 
-## Modify Commands
-
-Every write operation follows this workflow:
-1. **Preview** — shows the commands that will be executed
-2. **Confirmation** — asks `Confirm? [y/N]` (default is No)
-3. **Execution** — sends commands to the switch in config mode
-4. **Verification** — reads back the configuration and shows the result
-
-Configuration saving (`write memory`) is always a separate, explicit action and is never done automatically.
-
-### VLAN Management
+Remember: Configuration saving (`write memory`) is always a separate, explicit action to prevent accidental NVRAM pollution. Every write command prints a safe preview and asks for confirmation by default.
 
 ```bash
-# Create VLAN
-python3 netaudit.py --switch core_switch vlan create 99 VLAN_NAME
+# VLAN manipulation
+python3 netaudit.py --switch core_switch vlan create 99 "GUEST_NETWORK"
+python3 netaudit.py --switch core_switch vlan rename 99 "IoT_NETWORK"
+python3 netaudit.py --switch core_switch vlan delete 99   # Will warn if active ports exist
 
-# Rename VLAN
-python3 netaudit.py --switch core_switch vlan rename 99 NEW_NAME
-
-# Delete VLAN
-# (if there are active ports in the VLAN, it will show a warning before asking for confirmation)
-python3 netaudit.py --switch core_switch vlan delete 99
-```
-
-### Ports — VLAN Assignment
-
-```bash
-# Set port to access mode (untagged) on a VLAN
+# Switchport manipulation
 python3 netaudit.py --switch core_switch port access 1/3 10
-
-# Add port as tagged on a VLAN
 python3 netaudit.py --switch core_switch port tag 2/A1 100
-
-# Remove port from tagged on a VLAN
 python3 netaudit.py --switch core_switch port untag 2/A1 100
-```
-
-### Ports — Name/Comment
-
-```bash
-# Set port name
 python3 netaudit.py --switch core_switch port set-name 1/2 "Aruba_AP_Office"
+python3 netaudit.py --switch core_switch port set-name 1/2 "" # Clears description
 
-# Remove port name (empty string)
-python3 netaudit.py --switch core_switch port set-name 1/2 ""
-```
-
-### Saving Configuration
-
-```bash
-# Save running-config to startup-config (write memory)
+# Save running-config to startup-config
 python3 netaudit.py --switch core_switch save
 ```
 
----
+### 3. Nmap Database Integration
 
-## Nmap Database Integration
+By generating standard Nmap XML outputs (`nmap -oX nmap-output.xml`), `netaudit` can enrich layer 2 data with layer 3/4/7 information, helping network operators trace specific physical ports to precise OS/Service assets.
 
-To use the `inventory`, `port find`, and MAC table enrichment commands, an XML file generated by nmap is required.
-
-### Nmap Command Example
+> Ensure the XML file is named `nmap-output.xml` in your working directory, or set the path via `--nmap-db <path>` or the `NETAUDIT_NMAP_DB` env variable.
 
 ```bash
-sudo nmap -sS -sU \
-  -p T:21,22,23,80,135,139,443,445,3389,5000,8080,8443,U:137,161,5353 \
-  -O --osscan-guess -sV --version-light \
-  --script=nbstat,smb-os-discovery,snmp-sysdescr,dns-service-discovery \
-  -T4 --max-retries 2 \
-  -oX nmap-output.xml \
-  10.168.0.0/20
-```
-
-- Estimated time: ~26 min for a /20 with ~380 hosts
-- The file must be named **`nmap-output.xml`** and be located in the **current directory** where netaudit is executed.
-
-Alternatively, you can specify the path explicitly:
-
-```bash
-python3 netaudit.py --nmap-db /path/to/scan.xml inventory
-# or
-export NETAUDIT_NMAP_DB=/path/to/scan.xml
-```
-
----
-
-## Nmap Inventory Features
-
-Commands that use the nmap DB without connecting to the switches:
-
-```bash
-# List all active hosts in the DB
+# List all active layer 3 hosts loaded in the DB
 python3 netaudit.py inventory
 
-# Filter by OS
+# Filter assets by OS or open services
 python3 netaudit.py inventory --os win
-python3 netaudit.py inventory --os linux
-python3 netaudit.py inventory --os other      # Unidentified OS
-
-# Filter by open service
 python3 netaudit.py inventory --service ssh
-python3 netaudit.py inventory --service snmp
-python3 netaudit.py inventory --service microsoft-ds
 
-# See a list of all identified services and their host counts
-python3 netaudit.py inventory --list-services
+# MAC table tracking and rogue switch detection
+python3 netaudit.py --switch core_switch port find 10.168.0.3        # Find physical port by IP
+python3 netaudit.py --switch core_switch port find DESKTOP-PC        # Find physical port by name
+python3 netaudit.py --switch core_switch port find aa:bb:cc:dd:ee:ff # Find physical port by MAC
+python3 netaudit.py --switch core_switch port find --rogue           # Find multiple MACs on Edge ports automatically
 
-# Find which switch port a host is connected to (by IP, hostname, or MAC)
-python3 netaudit.py --switch core_switch port find 10.168.0.3
-python3 netaudit.py --switch core_switch port find DESKTOP-2G07OBV
-python3 netaudit.py --switch core_switch port find aa:bb:cc:dd:ee:ff
-
-# Detect Rogue Devices / Unmanaged Switches (find multiple MACs on Edge ports)
-python3 netaudit.py --switch core_switch port find --rogue
-
-# MAC table enriched with IP, Hostname, Vendor, and OS from the nmap DB
+# See a live MAC table enriched with DNS names, Vendor OUI, and OS fingerprint from the Nmap scan
 python3 netaudit.py --switch core_switch macs
 ```
 
----
+### 4. Data Export (CSV) & Open Services Display
 
-## The `--yes` Flag (for Automation/LLMs)
+`netaudit` can effortlessly parse convoluted command outputs into machine-readable comma-separated datasets.
 
-Bypasses interactive confirmation. Useful for programmatic execution:
+To export pure CSV data, pass the `--csv` flag **before** any subcommand. This silences connection logs allowing standard bash pipes:
+```bash
+python3 netaudit.py --switch core_switch --csv ports > interface_status.csv
+python3 netaudit.py --switch core_switch --csv port-names > cable_docs.csv
+python3 netaudit.py --switch core_switch --csv neighbors > lldp_topology.csv
+python3 netaudit.py --switch core_switch --csv port find --rogue > rouge_reports.csv
+```
+
+To extract full port and service vectors from Nmap, append `--services` to inventory or MAC commands:
+```bash
+# Print formatted columns including active TCP/UDP ports
+python3 netaudit.py inventory --services
+
+# Export a highly-detailed enriched MAC table complete with open service arrays directly to CSV
+python3 netaudit.py --switch core_switch --csv macs --services > asset_matrix.csv
+```
+
+### 5. Automation (`--yes`)
+
+Bypass interactive confirmation prompts programmatically using the non-interactive `--yes` flag.
 
 ```bash
 python3 netaudit.py --switch core_switch --yes vlan create 99 TEST
@@ -236,9 +179,23 @@ python3 netaudit.py --switch core_switch --yes save
 
 ---
 
-## Operational Notes
+## File Structure
 
-- Invalid arguments are checked **before** opening the SSH connection.
-- The SSH connection uses `netmiko` in interactive mode.
-- The switch handles HPE banners and `[y/n]` confirmation transparently.
-- The `diagnose` report includes: version, VLANs, ports, STP (summary), LLDP, MAC table, system logs, and running-config.
+```text
+netaudit/
+├── netaudit.py        # Core CLI Entry Point and Argument Parser Layer
+├── switches.yaml      # Environment Inventory file (User-defined)
+└── lib/
+    ├── switch.py          # Abstracted Netmiko execution handler
+    ├── diagnostics.py     # Log processors, syntax parsers, and read operations
+    ├── modifications.py   # Guardrailed write operations
+    └── nmap_parser.py     # XML processing class for host correlation logic
+```
+
+## Contributing
+
+Contributions to `netaudit` are highly appreciated. Feel free to open issues or pull requests on GitHub for bug fixes or features, especially adding support for new switch models and parsing modules!
+
+## License
+
+This project is licensed under the GNU General Public License v3.0 - see the LICENSE file for details.

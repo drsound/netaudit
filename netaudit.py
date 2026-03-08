@@ -34,8 +34,8 @@ def resolve_switch(args):
             sys.exit(1)
         return switches[args.switch]
     elif args.host:
-        if not args.user or not args.password:
-            print("Error: --host requires both --user and --password")
+        if not args.user:
+            print("Error: --host requires --user. Add --password if public key auth is not configured.")
             sys.exit(1)
         return {'host': args.host, 'user': args.user, 'password': args.password}
     else:
@@ -129,9 +129,11 @@ def cmd_ports(sw, args):
     print(diagnostics.get_interface_brief(sw))
 
 
-def _enrich_mac_table(raw, nmap_db):
-    """Replaces the raw MAC table with a fully enriched table including nmap data."""
-    from lib.nmap_parser import normalize_mac
+def _enrich_mac_table(raw, nmap_db, show_services=False, as_csv=False):
+    """Replaces the raw MAC table with a fully enriched table including nmap data or formats it as CSV."""
+    from lib.nmap_parser import normalize_mac, NmapDB
+    import csv
+    import io
 
     # Aruba MAC table format: "  0001c0-17da89     1/23    1   "
     # MAC is 12 hex chars split by ONE dash: xxxxxx-xxxxxx
@@ -157,6 +159,9 @@ def _enrich_mac_table(raw, nmap_db):
             vlan = m.group(3)
             mac_norm = normalize_mac(mac_raw)
             host = nmap_db.host_by_mac(mac_norm) if mac_norm else None
+            
+            services_str = NmapDB.format_services(host) if host and show_services else ''
+            
             rows.append({
                 'mac': mac_raw,
                 'port': port,
@@ -165,29 +170,78 @@ def _enrich_mac_table(raw, nmap_db):
                 'hostname': host['hostname'] if host else '',
                 'vendor':   host['vendor']   if host else '',
                 'os':       host['os']       if host else '',
+                'services': services_str,
             })
         elif not in_data:
             title_lines.append(line)
 
-    # Column widths (auto-fit)
+    if as_csv:
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        headers = ['MAC Address', 'Port', 'VLAN', 'IP', 'Hostname', 'Vendor', 'OS']
+        if show_services:
+            headers.append('Services')
+        writer.writerow(headers)
+        
+        for r in rows:
+            row = [r['mac'], r['port'], r['vlan'], r['ip'], r['hostname'], r['vendor'], r['os']]
+            if show_services:
+                row.append(r['services'])
+            writer.writerow(row)
+            
+        return output.getvalue().strip()
+
+    # Column widths (auto-fit text format)
     col_mac  = max(18, max((len(r['mac'])      for r in rows), default=0) + 2)
     col_port = max(10, max((len(r['port'])     for r in rows), default=0) + 2)
     col_vlan = 6
     col_ip   = max(16, max((len(r['ip'])       for r in rows), default=0) + 2)
     col_host = max(24, max((len(r['hostname']) for r in rows), default=0) + 2)
     col_vend = max(20, max((len(r['vendor'])   for r in rows), default=0) + 2)
+    col_os   = max(4, max((len(r['os'])       for r in rows), default=0) + 2)
+    col_srv  = max(10, max((len(r['services']) for r in rows), default=0) + 2) if show_services else 0
 
-    hdr = (f"  {'MAC Address':<{col_mac}} {'Port':<{col_port}} {'VLAN':<{col_vlan}}"
-           f" {'IP':<{col_ip}} {'Hostname':<{col_host}} {'Vendor':<{col_vend}} OS")
-    sep = ('  ' + '-'*17 + ' ' + '-'*9 + ' ' + '-'*5 +
-           ' ' + '-'*(col_ip-1) + ' ' + '-'*(col_host-1) + ' ' + '-'*(col_vend-1) + ' ' + '-'*20)
+    if show_services:
+        hdr = (f"  {'MAC Address':<{col_mac - 1}} {'Port':<{col_port - 1}} {'VLAN':<{col_vlan - 1}}"
+               f" {'IP':<{col_ip - 1}} {'Hostname':<{col_host - 1}} {'Vendor':<{col_vend - 1}} "
+               f"{'OS':<{col_os - 1}} {'Services':<{col_srv - 1}}")
+        sep = (
+            '  ' + '-' * (col_mac - 1) + 
+            ' ' + '-' * (col_port - 1) + 
+            ' ' + '-' * (col_vlan - 1) +
+            ' ' + '-' * (col_ip - 1) + 
+            ' ' + '-' * (col_host - 1) + 
+            ' ' + '-' * (col_vend - 1) + 
+            ' ' + '-' * (col_os - 1) +
+            ' ' + '-' * (col_srv - 1)
+        )
+    else:
+        hdr = (f"  {'MAC Address':<{col_mac - 1}} {'Port':<{col_port - 1}} {'VLAN':<{col_vlan - 1}}"
+               f" {'IP':<{col_ip - 1}} {'Hostname':<{col_host - 1}} {'Vendor':<{col_vend - 1}} {'OS':<{col_os - 1}}")
+        sep = (
+            '  ' + '-' * (col_mac - 1) + 
+            ' ' + '-' * (col_port - 1) + 
+            ' ' + '-' * (col_vlan - 1) +
+            ' ' + '-' * (col_ip - 1) + 
+            ' ' + '-' * (col_host - 1) + 
+            ' ' + '-' * (col_vend - 1) + 
+            ' ' + '-' * (col_os - 1)
+        )
 
     lines_out = title_lines + [hdr, sep]
     for r in rows:
-        lines_out.append(
-            f"  {r['mac']:<{col_mac}} {r['port']:<{col_port}} {r['vlan']:<{col_vlan}}"
-            f" {r['ip']:<{col_ip}} {r['hostname']:<{col_host}} {r['vendor']:<{col_vend}} {r['os']}"
-        )
+        if show_services:
+            lines_out.append(
+                f"  {r['mac']:<{col_mac - 1}} {r['port']:<{col_port - 1}} {r['vlan']:<{col_vlan - 1}}"
+                f" {r['ip']:<{col_ip - 1}} {r['hostname']:<{col_host - 1}} {r['vendor']:<{col_vend - 1}} "
+                f"{r['os'][:col_os - 1]:<{col_os - 1}} {r['services'][:col_srv - 1]:<{col_srv - 1}}"
+            )
+        else:
+            lines_out.append(
+                f"  {r['mac']:<{col_mac - 1}} {r['port']:<{col_port - 1}} {r['vlan']:<{col_vlan - 1}}"
+                f" {r['ip']:<{col_ip - 1}} {r['hostname']:<{col_host - 1}} {r['vendor']:<{col_vend - 1}} {r['os'][:col_os - 1]:<{col_os - 1}}"
+            )
 
     return '\n'.join(lines_out)
 
@@ -195,6 +249,11 @@ def _enrich_mac_table(raw, nmap_db):
 def cmd_physical_check(sw, args):
     print(f"Running physical layer checks on {sw.hostname}...")
     print(diagnostics.check_physical(sw))
+
+
+def cmd_ports(sw, args):
+    as_csv = getattr(args, 'csv', False)
+    print(diagnostics.get_interface_brief(sw, format_csv=as_csv))
 
 
 def cmd_log_audit(sw, args):
@@ -205,14 +264,27 @@ def cmd_log_audit(sw, args):
 def cmd_macs(sw, args):
     nmap_db = get_nmap_db(args)
     raw = diagnostics.get_mac_table(sw, port=args.port, vlan=args.vlan)
+    
+    as_csv = getattr(args, 'csv', False)
+    show_srv = getattr(args, 'services', False)
+    
     if nmap_db:
-        print(_enrich_mac_table(raw, nmap_db))
+        print(_enrich_mac_table(raw, nmap_db, show_services=show_srv, as_csv=as_csv))
     else:
-        print(raw)
+        # If no nmap DB and user wants CSV, we can still parse and format it as CSV
+        # by passing an empty nmap_db proxy or adjusting logic. For now:
+        if as_csv:
+             # Fast fake class without refactoring the whole signature
+             class FakeNmapDB:
+                 def host_by_mac(self, mac): return None
+             print(_enrich_mac_table(raw, FakeNmapDB(), show_services=show_srv, as_csv=True))
+        else:
+             print(raw)
 
 
 def cmd_neighbors(sw, args):
-    print(diagnostics.get_lldp_neighbors(sw))
+    as_csv = getattr(args, 'csv', False)
+    print(diagnostics.get_lldp_neighbors(sw, format_csv=as_csv))
 
 
 def cmd_logs(sw, args):
@@ -220,7 +292,8 @@ def cmd_logs(sw, args):
 
 
 def cmd_port_names(sw, args):
-    print(diagnostics.get_port_names(sw, port=args.port))
+    as_csv = getattr(args, 'csv', False)
+    print(diagnostics.get_port_names(sw, port=args.port, format_csv=as_csv))
 
 
 PORT_USAGE = textwrap.dedent("""\
@@ -284,7 +357,33 @@ def cmd_port_find(sw, args):
 
         rogues_found = False
         nmap_db = get_nmap_db(args)
+        as_csv = getattr(args, 'csv', False)
         
+        if as_csv:
+            import csv
+            import io
+            out = io.StringIO()
+            writer = csv.writer(out)
+            writer.writerow(['Switch Port', 'Device MAC', 'IP', 'Hostname', 'Vendor', 'OS'])
+            
+            for port, macs in macs_per_port.items():
+                if len(macs) > 1 and port in edge_ports:
+                    rogues_found = True
+                    for mac in macs:
+                        ip, hostname, vendor, os_info = "", "", "", ""
+                        if nmap_db:
+                            h = nmap_db.host_by_mac(mac)
+                            if h:
+                                ip = h['ip'] or ""
+                                hostname = h['hostname'] or ""
+                                vendor = h['vendor'] or ""
+                                os_info = h['os'] or ""
+                        writer.writerow([port, mac, ip, hostname, vendor, os_info])
+            if rogues_found:
+                print(out.getvalue().strip())
+            return
+        
+        # Standard Text Output
         for port, macs in macs_per_port.items():
             # A rogue device is suspected if a port has multiple MACs AND is marked as an Edge port
             # (If it's not an Edge port, it's likely a legitimate uplink/switch)
@@ -298,10 +397,7 @@ def cmd_port_find(sw, args):
                 print(f"      {'-'*20:<20} {'-'*16:<16} {'-'*30:<30} {'-'*20:<20} {'-'*20:<20}")
 
                 for mac in macs:
-                    ip = ""
-                    hostname = ""
-                    vendor = ""
-                    os_info = ""
+                    ip, hostname, vendor, os_info = "", "", "", ""
                     if nmap_db:
                         h = nmap_db.host_by_mac(mac)
                         if h:
@@ -473,6 +569,30 @@ def cmd_inventory(sw, args):
             filters.append(f"service={args.service}")
         print(f"Filters: {', '.join(filters)}")
 
+    as_csv = getattr(args, 'csv', False)
+    show_services = getattr(args, 'services', False)
+    from lib.nmap_parser import NmapDB
+    
+    if as_csv:
+        import csv
+        import io
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        headers = ['IP', 'MAC', 'Vendor', 'Hostname', 'OS']
+        if show_services:
+            headers.append('Services')
+        writer.writerow(headers)
+        
+        for h in hosts:
+            row = [h['ip'], h['mac'] or '', h['vendor'] or '', h['hostname'] or '', h['os'] or '']
+            if show_services:
+                row.append(NmapDB.format_services(h))
+            writer.writerow(row)
+            
+        print(output.getvalue().strip())
+        return
+
     if not hosts:
         print("No hosts found matching the specified filters.")
         return
@@ -484,18 +604,44 @@ def cmd_inventory(sw, args):
     col_mac = 19
     col_vendor = min(20, max((len(h['vendor']) for h in hosts if h['vendor']), default=6) + 1)
     col_host = min(28, max((len(h['hostname']) for h in hosts if h['hostname']), default=8) + 1)
+    col_os = min(40, max((len(h['os']) for h in hosts if h['os']), default=2) + 2)
+    col_srv = 0
+    if show_services:
+        col_srv = min(50, max((len(NmapDB.format_services(h)) for h in hosts), default=8) + 2)
 
-    fmt = f"{{:<{col_ip}}} {{:<{col_mac}}} {{:<{col_vendor}}} {{:<{col_host}}} {{}}"
-    sep = '-' * (col_ip + col_mac + col_vendor + col_host + 42)
-
-    print(fmt.format('IP', 'MAC', 'Vendor', 'Hostname', 'OS'))
+    if show_services:
+        fmt = f"{{:<{col_ip - 1}}} {{:<{col_mac - 1}}} {{:<{col_vendor - 1}}} {{:<{col_host - 1}}} {{:<{col_os - 1}}} {{:<{col_srv - 1}}}"
+        sep = (
+            '-' * (col_ip - 1) + 
+            ' ' + '-' * (col_mac - 1) + 
+            ' ' + '-' * (col_vendor - 1) + 
+            ' ' + '-' * (col_host - 1) + 
+            ' ' + '-' * (col_os - 1) + 
+            ' ' + '-' * (col_srv - 1)
+        )
+        print(fmt.format('IP', 'MAC', 'Vendor', 'Hostname', 'OS', 'Services'))
+    else:
+        fmt = f"{{:<{col_ip - 1}}} {{:<{col_mac - 1}}} {{:<{col_vendor - 1}}} {{:<{col_host - 1}}} {{:<{col_os - 1}}}"
+        sep = (
+            '-' * (col_ip - 1) + 
+            ' ' + '-' * (col_mac - 1) + 
+            ' ' + '-' * (col_vendor - 1) + 
+            ' ' + '-' * (col_host - 1) + 
+            ' ' + '-' * (col_os - 1)
+        )
+        print(fmt.format('IP', 'MAC', 'Vendor', 'Hostname', 'OS'))
+        
     print(sep)
 
     for h in hosts:
         vendor_str = (h['vendor'] or '')[:col_vendor - 1]
         hostname_str = (h['hostname'] or '')[:col_host - 1]
-        os_str = (h['os'] or '')[:50]
-        print(fmt.format(h['ip'], h['mac'] or '', vendor_str, hostname_str, os_str))
+        os_str = (h['os'] or '')[:col_os - 1]
+        if show_services:
+            svc_str = NmapDB.format_services(h)[:col_srv - 1]
+            print(fmt.format(h['ip'], h['mac'] or '', vendor_str, hostname_str, os_str, svc_str))
+        else:
+            print(fmt.format(h['ip'], h['mac'] or '', vendor_str, hostname_str, os_str))
 
 
 # --- Parser ---
@@ -564,6 +710,9 @@ def build_parser():
     parser.add_argument('--nmap-db', metavar='PATH', dest='nmap_db',
                         help='Path to nmap XML file (default: auto-detect map_rete*.xml)')
 
+    parser.add_argument('--csv', action='store_true',
+                        help='Format output as CSV where applicable')
+
     sub = parser.add_subparsers(dest='cmd', metavar='COMMAND')
     sub.required = True
 
@@ -621,6 +770,7 @@ def build_parser():
                                    netaudit macs --port 1/3 --vlan 2    combined filters"""))
     macs_p.add_argument('--port', metavar='PORT', help='Filter by port (e.g. 1/3, 2/A1)')
     macs_p.add_argument('--vlan', metavar='VLAN', help='Filter by VLAN (e.g. 2)')
+    macs_p.add_argument('--services', action='store_true', help='Include open nmap services column')
 
     pn = sub.add_parser('port-names', formatter_class=R,
                         help='Show configured port names/comments',
@@ -672,10 +822,11 @@ def build_parser():
     inv_p.add_argument('--os', dest='os_filter', metavar='OS',
                        choices=['win', 'linux', 'other'],
                        help='Filter by OS: win, linux, other')
-    inv_p.add_argument('--service', metavar='SVC',
-                       help='Filter by open service (e.g. ssh, rdp, smb, snmp)')
+    inv_p.add_argument('--service', metavar='NAME',
+                       help='Filter by open service name (e.g. http, rdp)')
     inv_p.add_argument('--list-services', action='store_true',
-                       help='List all open services in the nmap DB with host count')
+                       help='List all detected services in DB with host counts')
+    inv_p.add_argument('--services', action='store_true', help='Include open nmap services column')
 
     query_p = sub.add_parser('query', formatter_class=R,
                              help='Execute arbitrary read-only commands')
@@ -752,10 +903,13 @@ def main():
     sw_config = resolve_switch(args)
     handler = COMMANDS[args.cmd]
 
-    print(f"Connecting to {sw_config['host']}...")
+    quiet = getattr(args, 'csv', False)
+    if not quiet:
+        print(f"Connecting to {sw_config['host']}...")
     try:
         with Switch(**sw_config) as sw:
-            print(f"Connected to {sw.hostname}\n")
+            if not quiet:
+                print(f"Connected to {sw.hostname}\n")
             handler(sw, args)
     except ConnectionError as e:
         print(f"Connection error: {e}")

@@ -19,12 +19,48 @@ def get_spanning_tree(sw):
     return sw.run('show spanning-tree')
 
 
-def get_interface_brief(sw):
-    return sw.run('show interface brief')
+def get_interface_brief(sw, format_csv=False):
+    output = sw.run('show interface brief')
+    if not format_csv:
+        return output
+        
+    import csv
+    import io
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(['Port', 'Type', 'Enabled', 'Status', 'Mode', 'MDI'])
+    
+    # Format: 1/1  100/1000T  | No  Yes  Up   100FDx  MDI  off  0
+    for line in output.splitlines():
+        # Using a more robust regex to split columns around the pipe
+        m = re.match(r'^\s*([\w/]+)\s+([\w/]+)\s+\|\s+(Yes|No)\s+(Yes|No)\s+(Up|Down|Drop)\s+([0-9A-Za-z]+)\s+([0-9A-Za-z\-]+)\s+', line)
+        if m:
+            port, ptype, alert, enabled, status, mode, mdi = m.groups()
+            writer.writerow([port, ptype, enabled, status, mode, mdi])
+            
+    return out.getvalue().strip()
 
 
-def get_port_names(sw, port=None):
+def get_port_names(sw, port=None, format_csv=False):
     output = sw.run('show name')
+    
+    if format_csv:
+        import csv
+        import io
+        out = io.StringIO()
+        writer = csv.writer(out)
+        writer.writerow(['Port', 'Type', 'Name/Comment'])
+        
+        for line in output.splitlines():
+            # Format:  1/1    100/1000T  Server-01 
+            m = re.match(r'^\s*([\w/]+)\s+([\w/]+)\s+(.*)', line)
+            if m and not m.group(1).isalpha(): # skip header lines like 'Port'
+                p, t, n = m.groups()
+                if port and p != port:
+                    continue
+                writer.writerow([p, t, n.strip()])
+        return out.getvalue().strip()
+        
     if port is None:
         return output
     # Filter: return only the header lines + the matching port line
@@ -39,8 +75,53 @@ def get_port_names(sw, port=None):
     return '\n'.join(result)
 
 
-def get_lldp_neighbors(sw):
-    return sw.run('show lldp info remote-device')
+def get_lldp_neighbors(sw, format_csv=False):
+    output = sw.run('show lldp info remote-device')
+    if not format_csv:
+        return output
+        
+    import csv
+    import io
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(['Local Port', 'Chassis ID', 'Port ID', 'System Name'])
+    
+    # Format: 
+    #   LocalPort | ChassisId          PortId             PortDescr SysName           
+    #   --------- + ------------------ ------------------ --------- ------------------
+    #   1/4       | ec0273-02c200      48                 48        13.29_R3_ARUBA
+    in_data = False
+    chassis_idx = portid_idx = portdescr_idx = sysname_idx = -1
+    
+    for line in output.splitlines():
+        if not in_data:
+            if 'ChassisId' in line and 'PortId' in line:
+                chassis_idx = line.find('ChassisId')
+                portid_idx = line.find('PortId')
+                portdescr_idx = line.find('PortDescr')
+                sysname_idx = line.find('SysName')
+            elif re.match(r'^\s*-+\s*\+\s*-+', line):
+                in_data = True
+            continue
+            
+        if in_data and '|' in line:
+            parts = line.split('|', 1)
+            local_port = parts[0].strip()
+            
+            # Missing local_port or end of output
+            if not local_port:
+                continue
+
+            if chassis_idx > 0 and portid_idx > 0 and sysname_idx > 0:
+                chassis = line[chassis_idx:portid_idx].strip()
+                
+                end_port_id = portdescr_idx if portdescr_idx > 0 else sysname_idx
+                port_id = line[portid_idx:end_port_id].strip()
+                
+                sys_name = line[sysname_idx:].strip()
+                writer.writerow([local_port, chassis, port_id, sys_name])
+                
+    return out.getvalue().strip()
 
 
 def get_mac_table(sw, port=None, vlan=None):

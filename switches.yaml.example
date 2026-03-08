@@ -1,15 +1,35 @@
 switches:
-  centro_stella:
-    host: 10.168.13.100
+  # Example 1: Standard Aruba core switch with full details including expected_root_mac
+  core_switch:
+    host: 192.168.1.100
     user: admin
-    password: CHANGEME
+    password: corepassword
     device_type: aruba_osswitch   # aruba_osswitch | hp_procurve | hp_comware | fiberstore_fsos | tplink_jetstream | netgear_prosafe
     model: "Aruba 2930M-24G"
-    location: "R1 - Centro Stella"
-  r2:
-    host: 10.168.13.201
+    location: "Main Server Room"
+    expected_root_mac: "00:11:22:33:44:55" # Optional: Used by stp-detail to verify the active Root Bridge
+  
+  # Example 2: Access switch using SSH Public Key Authentication (password omitted)
+  access_switch_01:
+    host: 192.168.1.101
     user: admin
-    password: CHANGEME
+    # By omitting the password, the tool will automatically attempt to use your SSH keys (e.g., ~/.ssh/id_rsa or ssh-agent)
     device_type: hp_procurve
     model: "HP 2530-48G-PoE"
-    location: "R2"
+    location: "Floor 1 - IDF"
+    
+  # Example 3: Different vendor (Fiberstore)
+  dist_switch_01:
+    host: 192.168.1.50
+    user: netadmin
+    password: SuperSecretPassword!
+    device_type: fiberstore_fsos
+    model: "FS S5860-20SQ"
+    location: "Distribution Room B"
+
+  # Example 4: Minimal entry
+  legacy_switch:
+    host: 192.168.1.200
+    user: root
+    password: rootpassword
+    device_type: hp_comware

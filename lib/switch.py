@@ -6,14 +6,14 @@ from netmiko import ConnectHandler
 class Switch:
     """Multi-vendor wrapper around netmiko ConnectHandler."""
 
-    def __init__(self, host, user, password, device_type='aruba_osswitch', **kwargs):
+    def __init__(self, host, user, password=None, device_type='aruba_osswitch', **kwargs):
         self.host = host
         self.hostname = None
         self._params = {
             'device_type': device_type,
             'host': host,
             'username': user,
-            'password': password,
+            'password': password if password else '',
         }
         self._conn = None
 
