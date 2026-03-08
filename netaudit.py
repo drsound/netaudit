@@ -55,7 +55,7 @@ def get_nmap_db(args):
         path = os.environ.get('NETAUDIT_NMAP_DB')
         if not path:
             from lib.nmap_parser import NmapDB
-            path = NmapDB.find_db(SCRIPT_DIR)
+            path = NmapDB.find_db(os.getcwd())
 
     if not path or not os.path.isfile(path):
         return None
@@ -281,18 +281,16 @@ def cmd_traverse(sw, args):
 
 INVENTORY_USAGE = textwrap.dedent("""\
     uso:
-      netaudit inventory                        tutti gli host attivi
-      netaudit inventory --os WIN               solo host Windows
-      netaudit inventory --os LINUX             solo host Linux
-      netaudit inventory --os OTHER             host con OS non identificato
-      netaudit inventory --service rdp          host con RDP aperto
-      netaudit inventory --service ssh          host con SSH aperto
-      netaudit inventory --service snmp         host con SNMP aperto
+      netaudit inventory                         tutti gli host attivi
+      netaudit inventory --os win|linux|other    filtra per OS
+      netaudit inventory --service <nome>        filtra per servizio aperto
+      netaudit inventory --list-services         mostra tutti i servizi disponibili nel DB
 
     esempi:
       netaudit inventory
-      netaudit inventory --os WIN
-      netaudit inventory --service rdp
+      netaudit inventory --os win
+      netaudit inventory --service ssh
+      netaudit inventory --list-services
       netaudit --nmap-db /path/to/scan.xml inventory""")
 
 
@@ -302,20 +300,28 @@ def cmd_inventory(sw, args):
     if not nmap_db:
         print("Errore: nessun DB nmap disponibile.")
         print("Specifica --nmap-db <path> o imposta la variabile NETAUDIT_NMAP_DB.")
-        print(f"File cercati: map_rete_deep.xml, map_rete.xml in {SCRIPT_DIR} e directory superiori.")
+        print("File cercato: nmap-output.xml nella directory corrente.")
         return
 
     hosts = nmap_db.all_hosts()
 
+    if args.list_services:
+        from collections import Counter
+        counts = Counter(svc['name'] for h in hosts for svc in h['services'])
+        print(f"Servizi nel DB nmap ({os.path.basename(nmap_db.path)}):\n")
+        for name, count in counts.most_common():
+            print(f"  {name:<20} {count:>4} host")
+        print(f"\nUsa --service <nome> per filtrare gli host.")
+        return
+
     if args.os_filter:
-        os_filter = args.os_filter.upper()
         def matches_os(h):
             os_str = h['os'].lower()
-            if os_filter == 'WIN':
+            if args.os_filter == 'win':
                 return 'windows' in os_str
-            elif os_filter == 'LINUX':
+            elif args.os_filter == 'linux':
                 return 'linux' in os_str
-            elif os_filter == 'OTHER':
+            elif args.os_filter == 'other':
                 return 'windows' not in os_str and 'linux' not in os_str
             return True
         hosts = [h for h in hosts if matches_os(h)]
@@ -391,7 +397,7 @@ def build_parser():
               save                            salva configurazione (write memory)
 
             nmap (nessuna connessione switch):
-              inventory [--os WIN|LINUX|OTHER] [--service <nome>]
+              inventory [--os win|linux|other] [--service <nome>] [--list-services]
                                               inventario host attivi dal DB nmap
 
             nmap + switch:
@@ -515,10 +521,12 @@ def build_parser():
                             help='Inventario host attivi dal DB nmap (nessuna connessione switch)',
                             description=INVENTORY_USAGE)
     inv_p.add_argument('--os', dest='os_filter', metavar='OS',
-                       choices=['WIN', 'LINUX', 'OTHER'],
-                       help='Filtra per OS: WIN, LINUX, OTHER')
+                       choices=['win', 'linux', 'other'],
+                       help='Filtra per OS: win, linux, other')
     inv_p.add_argument('--service', metavar='SVC',
                        help='Filtra per servizio aperto (es. ssh, rdp, smb, snmp)')
+    inv_p.add_argument('--list-services', action='store_true',
+                       help='Elenca tutti i servizi aperti nel DB nmap con conteggio host')
 
     return parser
 

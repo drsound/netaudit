@@ -3,7 +3,7 @@
 ## Dipendenze
 
 ```bash
-pip install pexpect pyyaml
+pip install netmiko pyyaml
 ```
 
 ## Configurazione switch
@@ -40,9 +40,10 @@ netaudit/
 ├── switches.yaml      # Inventario switch con credenziali
 ├── README.md
 └── lib/
-    ├── switch.py          # Classe ArubaSwitch (sessione pexpect)
+    ├── switch.py          # Classe Switch (sessione netmiko)
     ├── diagnostics.py     # Operazioni di lettura e analisi
-    └── modifications.py   # Operazioni di scrittura con safety
+    ├── modifications.py   # Operazioni di scrittura con safety
+    └── nmap_parser.py     # Parser XML nmap (database inventario rete)
 ```
 
 ---
@@ -147,6 +148,67 @@ python3 netaudit.py --switch centro_stella save
 
 ---
 
+## Database nmap
+
+Per usare i comandi `inventory`, `port find` e l'arricchimento della tabella MAC, occorre un file XML generato da nmap.
+
+### Comando nmap
+
+```bash
+sudo nmap -sS -sU \
+  -p T:21,22,23,80,135,139,443,445,3389,5000,8080,8443,U:137,161,5353 \
+  -O --osscan-guess -sV --version-light \
+  --script=nbstat,smb-os-discovery,snmp-sysdescr,dns-service-discovery \
+  -T4 --max-retries 2 \
+  -oX nmap-output.xml \
+  10.168.0.0/20
+```
+
+- Tempo stimato: ~26 min per una /20 con ~380 host
+- Il file deve chiamarsi **`nmap-output.xml`** e trovarsi nella **directory corrente** da cui si lancia netaudit
+
+In alternativa si può specificare il percorso esplicitamente:
+
+```bash
+python3 netaudit.py --nmap-db /path/to/scan.xml inventory
+# oppure
+export NETAUDIT_NMAP_DB=/path/to/scan.xml
+```
+
+---
+
+## Inventario nmap
+
+Comandi che usano il DB nmap senza connettersi agli switch:
+
+```bash
+# Tutti gli host attivi nel DB
+python3 netaudit.py inventory
+
+# Filtra per OS
+python3 netaudit.py inventory --os win
+python3 netaudit.py inventory --os linux
+python3 netaudit.py inventory --os other      # OS non identificato
+
+# Filtra per servizio aperto
+python3 netaudit.py inventory --service ssh
+python3 netaudit.py inventory --service snmp
+python3 netaudit.py inventory --service microsoft-ds
+
+# Scopri quali servizi sono presenti nel DB
+python3 netaudit.py inventory --list-services
+
+# Trova su quale porta dello switch è connesso un host (IP, hostname o MAC)
+python3 netaudit.py --switch centro_stella port find 10.168.0.3
+python3 netaudit.py --switch centro_stella port find DESKTOP-2G07OBV
+python3 netaudit.py --switch centro_stella port find aa:bb:cc:dd:ee:ff
+
+# Tabella MAC arricchita con hostname dal DB nmap
+python3 netaudit.py --switch centro_stella macs
+```
+
+---
+
 ## Flag --yes (per automazione/LLM)
 
 Bypassa la conferma interattiva. Utile per uso programmatico:
@@ -162,6 +224,6 @@ python3 netaudit.py --switch centro_stella --yes save
 ## Note operative
 
 - Gli argomenti non validi vengono controllati **prima** di aprire la connessione SSH.
-- La connessione SSH usa `pexpect` in modalità interattiva (il comando batch non è supportato dagli switch Aruba).
+- La connessione SSH usa `netmiko` in modalità interattiva.
 - Lo switch gestisce il banner HPE e la conferma `[y/n]` in modo trasparente.
 - Il report `diagnose` include: versione, VLAN, porte, STP, LLDP, MAC table, log, running-config.

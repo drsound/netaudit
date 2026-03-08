@@ -144,18 +144,9 @@ class NmapDB:
         return list(self._hosts)
 
     @staticmethod
-    def find_db(start_dir=None):
-        """Cerca map_rete_deep.xml o map_rete.xml partendo da start_dir risalendo di un livello."""
-        if start_dir is None:
-            start_dir = os.path.dirname(os.path.abspath(__file__))
-        candidates = [
-            start_dir,
-            os.path.dirname(start_dir),
-            os.path.dirname(os.path.dirname(start_dir)),
-        ]
-        for directory in candidates:
-            for name in ('map_rete_deep.xml', 'map_rete.xml'):
-                path = os.path.join(directory, name)
-                if os.path.isfile(path):
-                    return path
-        return None
+    def find_db(directory=None):
+        """Cerca nmap-output.xml nella directory specificata (default: directory corrente)."""
+        if directory is None:
+            directory = os.getcwd()
+        path = os.path.join(directory, 'nmap-output.xml')
+        return path if os.path.isfile(path) else None
