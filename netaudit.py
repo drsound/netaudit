@@ -6,6 +6,7 @@ import os
 import re
 import sys
 import textwrap
+from collections import Counter
 
 import yaml
 
@@ -306,7 +307,6 @@ def cmd_inventory(sw, args):
     hosts = nmap_db.all_hosts()
 
     if args.list_services:
-        from collections import Counter
         counts = Counter(svc['name'] for h in hosts for svc in h['services'])
         print(f"Servizi nel DB nmap ({os.path.basename(nmap_db.path)}):\n")
         for name, count in counts.most_common():
@@ -321,9 +321,8 @@ def cmd_inventory(sw, args):
                 return 'windows' in os_str
             elif args.os_filter == 'linux':
                 return 'linux' in os_str
-            elif args.os_filter == 'other':
+            else:  # 'other'
                 return 'windows' not in os_str and 'linux' not in os_str
-            return True
         hosts = [h for h in hosts if matches_os(h)]
 
     if args.service:
