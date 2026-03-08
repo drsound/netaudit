@@ -60,6 +60,18 @@ python3 netaudit.py --host 192.168.1.100 --user admin --password secret vlans
 python3 netaudit.py --host 192.168.1.100 --user admin vlans  # Falls back to SSH Key Auth
 ```
 
+### Custom Inventory Path
+By default, the tool looks for `switches.yaml` in the same directory as the script. You can override this using the `--switches-file` option or by setting the `NETAUDIT_SWITCHES_FILE` environment variable.
+
+```bash
+# Using the environment variable
+export NETAUDIT_SWITCHES_FILE="/path/to/my_switches.yaml"
+python3 netaudit.py --switch core_switch diagnose
+
+# Using the command line option
+python3 netaudit.py --switches-file "/custom/path/switches.yaml" --switch core_switch vlans
+```
+
 ---
 
 ## Usage Guide
@@ -127,6 +139,12 @@ python3 netaudit.py --switch core_switch save
 By generating standard Nmap XML outputs (`nmap -oX nmap-output.xml`), `netaudit` can enrich layer 2 data with layer 3/4/7 information, helping network operators trace specific physical ports to precise OS/Service assets.
 
 > Ensure the XML file is named `nmap-output.xml` in your working directory, or set the path via `--nmap-db <path>` or the `NETAUDIT_NMAP_DB` env variable.
+
+**Recommended Nmap Scan Command:**
+To get the most out of `netaudit`, use a scan that includes OS detection and service versioning:
+```bash
+nmap -sS -sU -p T:21,22,23,80,135,139,443,445,3389,5000,8080,8443,U:137,161,5353 -O -sV --version-light --script=nbstat,smb-os-discovery,snmp-sysdescr,dns-service-discovery -T4 -oX nmap-output.xml 192.168.1.0/24
+```
 
 ```bash
 # List all active layer 3 hosts loaded in the DB

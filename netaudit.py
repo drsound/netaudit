@@ -19,15 +19,32 @@ SWITCHES_FILE = os.path.join(SCRIPT_DIR, 'switches.yaml')
 _nmap_db_cache = None
 
 
-def load_switches():
-    with open(SWITCHES_FILE) as f:
-        return yaml.safe_load(f)['switches']
+def load_switches(args):
+    """Loads switches from file. Priority: --switches-file > NETAUDIT_SWITCHES_FILE > default switches.yaml"""
+    path = None
+    if hasattr(args, 'switches_file') and args.switches_file:
+        path = args.switches_file
+    else:
+        path = os.environ.get('NETAUDIT_SWITCHES_FILE')
+        if not path:
+            path = SWITCHES_FILE
+
+    if not os.path.isfile(path):
+        print(f"Error: switches file not found: {path}")
+        sys.exit(1)
+
+    with open(path) as f:
+        try:
+            return yaml.safe_load(f)['switches']
+        except Exception as e:
+            print(f"Error parsing {path}: {e}")
+            sys.exit(1)
 
 
 def resolve_switch(args):
     """Return connection kwargs from --switch or --host/--user/--password."""
     if args.switch:
-        switches = load_switches()
+        switches = load_switches(args)
         if args.switch not in switches:
             print(f"Error: switch '{args.switch}' not found in switches.yaml")
             print(f"Available switches: {', '.join(switches.keys())}")
@@ -705,6 +722,8 @@ def build_parser():
                         help='Switch IP/hostname (alternative to --switch)')
     parser.add_argument('--user', metavar='USER', help='SSH Username')
     parser.add_argument('--password', metavar='PASS', help='SSH Password')
+    parser.add_argument('--switches-file', metavar='PATH', dest='switches_file',
+                        help='Path to switches.yaml (default: switches.yaml in script dir)')
     parser.add_argument('--yes', action='store_true',
                         help='Bypass interactive confirmation (for automation/LLM)')
     parser.add_argument('--nmap-db', metavar='PATH', dest='nmap_db',
