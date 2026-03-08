@@ -4,12 +4,12 @@ from .diagnostics import get_vlan, get_vlans, get_running_config, get_port_names
 def _confirm(yes=False):
     if yes:
         return True
-    resp = input("Confermare? [s/N]: ").strip().lower()
-    return resp in ('s', 'si', 'y', 'yes')
+    resp = input("Confirm? [y/N]: ").strip().lower()
+    return resp in ('y', 'yes')
 
 
 def _preview(cmds):
-    print("Comandi che verranno eseguiti:")
+    print("Commands that will be executed:")
     for cmd in cmds:
         print(f"  {cmd}")
     print()
@@ -21,18 +21,18 @@ def rename_vlan(sw, vlan_id, name, yes=False):
         f'name "{name}"',
         'exit',
     ]
-    print(f"\n[RINOMINA VLAN {vlan_id} → \"{name}\"]")
+    print(f"\n[RENAME VLAN {vlan_id} → \"{name}\"]")
     _preview(cmds)
 
     if not _confirm(yes):
-        print("Operazione annullata.")
+        print("Operation cancelled.")
         return
 
     output = sw.configure(cmds)
     if output:
         print(output)
 
-    print(f"\nVerifica VLAN {vlan_id}:")
+    print(f"\nVerify VLAN {vlan_id}:")
     print(get_vlan(sw, vlan_id))
 
 
@@ -42,18 +42,18 @@ def create_vlan(sw, vlan_id, name, yes=False):
         f'name "{name}"',
         'exit',
     ]
-    print(f"\n[CREA VLAN {vlan_id} - {name}]")
+    print(f"\n[CREATE VLAN {vlan_id} - {name}]")
     _preview(cmds)
 
     if not _confirm(yes):
-        print("Operazione annullata.")
+        print("Operation cancelled.")
         return
 
     output = sw.configure(cmds)
     if output:
         print(output)
 
-    print(f"\nVerifica VLAN {vlan_id}:")
+    print(f"\nVerify VLAN {vlan_id}:")
     print(get_vlan(sw, vlan_id))
 
 
@@ -61,7 +61,7 @@ def delete_vlan(sw, vlan_id, yes=False):
     # Safety check: look for active ports in this VLAN before deleting
     vlan_info = get_vlan(sw, vlan_id)
     if 'Invalid' in vlan_info or 'does not exist' in vlan_info.lower():
-        print(f"VLAN {vlan_id} non esiste.")
+        print(f"VLAN {vlan_id} does not exist.")
         return
 
     # Check for tagged/untagged ports
@@ -80,7 +80,7 @@ def delete_vlan(sw, vlan_id, yes=False):
                     untagged.append(ports)
 
     if tagged or untagged:
-        print(f"ATTENZIONE: La VLAN {vlan_id} ha porte attive:")
+        print(f"WARNING: VLAN {vlan_id} has active ports:")
         if untagged:
             print(f"  Untagged: {', '.join(untagged)}")
         if tagged:
@@ -88,18 +88,18 @@ def delete_vlan(sw, vlan_id, yes=False):
         print()
 
     cmds = [f'no vlan {vlan_id}']
-    print(f"\n[ELIMINA VLAN {vlan_id}]")
+    print(f"\n[DELETE VLAN {vlan_id}]")
     _preview(cmds)
 
     if not _confirm(yes):
-        print("Operazione annullata.")
+        print("Operation cancelled.")
         return
 
     output = sw.configure(cmds)
     if output:
         print(output)
 
-    print(f"\nVerifica (VLAN {vlan_id} non deve apparire):")
+    print(f"\nVerify (VLAN {vlan_id} should not appear):")
     print(get_vlans(sw))
 
 
@@ -109,18 +109,18 @@ def set_port_access(sw, port, vlan_id, yes=False):
         f'untagged {port}',
         'exit',
     ]
-    print(f"\n[PORTA {port} → ACCESS VLAN {vlan_id}]")
+    print(f"\n[PORT {port} → ACCESS VLAN {vlan_id}]")
     _preview(cmds)
 
     if not _confirm(yes):
-        print("Operazione annullata.")
+        print("Operation cancelled.")
         return
 
     output = sw.configure(cmds)
     if output:
         print(output)
 
-    print(f"\nVerifica VLAN {vlan_id}:")
+    print(f"\nVerify VLAN {vlan_id}:")
     print(get_vlan(sw, vlan_id))
 
 
@@ -130,18 +130,18 @@ def add_port_tagged(sw, port, vlan_id, yes=False):
         f'tagged {port}',
         'exit',
     ]
-    print(f"\n[PORTA {port} → TAGGED VLAN {vlan_id}]")
+    print(f"\n[PORT {port} → TAGGED VLAN {vlan_id}]")
     _preview(cmds)
 
     if not _confirm(yes):
-        print("Operazione annullata.")
+        print("Operation cancelled.")
         return
 
     output = sw.configure(cmds)
     if output:
         print(output)
 
-    print(f"\nVerifica VLAN {vlan_id}:")
+    print(f"\nVerify VLAN {vlan_id}:")
     print(get_vlan(sw, vlan_id))
 
 
@@ -151,50 +151,50 @@ def remove_port_tagged(sw, port, vlan_id, yes=False):
         f'no tagged {port}',
         'exit',
     ]
-    print(f"\n[RIMUOVI PORTA {port} DA TAGGED VLAN {vlan_id}]")
+    print(f"\n[REMOVE PORT {port} FROM TAGGED VLAN {vlan_id}]")
     _preview(cmds)
 
     if not _confirm(yes):
-        print("Operazione annullata.")
+        print("Operation cancelled.")
         return
 
     output = sw.configure(cmds)
     if output:
         print(output)
 
-    print(f"\nVerifica VLAN {vlan_id}:")
+    print(f"\nVerify VLAN {vlan_id}:")
     print(get_vlan(sw, vlan_id))
 
 
 def set_port_name(sw, port, name, yes=False):
     if name:
         cmds = [f'interface {port}', f'name "{name}"', 'exit']
-        label = f"[IMPOSTA NOME PORTA {port} → \"{name}\"]"
+        label = f"[SET PORT {port} NAME → \"{name}\"]"
     else:
         cmds = [f'interface {port}', 'no name', 'exit']
-        label = f"[RIMUOVI NOME PORTA {port}]"
+        label = f"[REMOVE PORT {port} NAME]"
 
     print(f"\n{label}")
     _preview(cmds)
 
     if not _confirm(yes):
-        print("Operazione annullata.")
+        print("Operation cancelled.")
         return
 
     output = sw.configure(cmds)
     if output:
         print(output)
 
-    print(f"\nVerifica porta {port}:")
+    print(f"\nVerify port {port}:")
     print(get_port_names(sw, port=port))
 
 
 def save_config(sw, yes=False):
-    print("\n[SALVA CONFIGURAZIONE — write memory]")
-    print("Questo salva la running-config in startup-config.\n")
+    print("\n[SAVE CONFIGURATION — write memory]")
+    print("This saves the running-config to startup-config.\n")
 
     if not _confirm(yes):
-        print("Operazione annullata.")
+        print("Operation cancelled.")
         return
 
     output = sw.run('write memory', timeout=60)

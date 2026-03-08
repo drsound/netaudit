@@ -1,14 +1,14 @@
-# netaudit — Tool di diagnostica e gestione switch Aruba
+# netaudit — Network Switch Diagnostic and Configuration Tool
 
-## Dipendenze
+## Dependencies
 
 ```bash
 pip install netmiko pyyaml
 ```
 
-## Configurazione switch
+## Switch Configuration
 
-Editare `switches.yaml` per aggiungere/modificare switch:
+Edit `switches.yaml` to add/modify switch entries:
 
 ```yaml
 switches:
@@ -26,133 +26,145 @@ switches:
     location: "R2"
 ```
 
-In alternativa si possono passare le credenziali direttamente:
+Alternatively, you can pass credentials directly in the CLI:
 
 ```bash
 python3 netaudit.py --host 10.168.13.100 --user admin --password SECRET vlans
 ```
 
-## Struttura file
+## File Structure
 
 ```
 netaudit/
-├── netaudit.py        # Entry point CLI
-├── switches.yaml      # Inventario switch con credenziali
+├── netaudit.py        # CLI Entry Point
+├── switches.yaml      # Switch inventory and credentials
 ├── README.md
 └── lib/
-    ├── switch.py          # Classe Switch (sessione netmiko)
-    ├── diagnostics.py     # Operazioni di lettura e analisi
-    ├── modifications.py   # Operazioni di scrittura con safety
-    └── nmap_parser.py     # Parser XML nmap (database inventario rete)
+    ├── switch.py          # Switch class (netmiko adapter)
+    ├── diagnostics.py     # Read and analysis operations
+    ├── modifications.py   # Write operations with safety guardrails
+    └── nmap_parser.py     # Nmap XML parser for host database integration
 ```
 
 ---
 
-## Comandi di lettura
+## Read Commands
 
 ```bash
-# Diagnosi completa: esegue tutti i comandi e salva report su file
-# (diagnose_<hostname>_<timestamp>.txt nella directory corrente)
-python3 netaudit.py --switch centro_stella diagnose
+# Full diagnosis: runs all read commands and saves a timestamped report
+# (saved as diagnose_<hostname>_<timestamp>.txt in the current directory)
+python3 netaudit.py --switch core_switch diagnose
 
-# Running config completa
-python3 netaudit.py --switch centro_stella config
+# Full running configuration
+python3 netaudit.py --switch core_switch config
 
-# Lista VLAN
-python3 netaudit.py --switch centro_stella vlans
+# Arbitrary query command execution
+python3 netaudit.py --switch core_switch query "show ip routing"
 
-# Dettaglio VLAN specifica
-python3 netaudit.py --switch centro_stella vlan 2
+# List all VLANs
+python3 netaudit.py --switch core_switch vlans
 
-# Spanning Tree (output completo)
-python3 netaudit.py --switch centro_stella stp
+# Specific VLAN detail
+python3 netaudit.py --switch core_switch vlan 2
 
-# Analisi STP con avvisi automatici (TC count elevato, porte blocking, root bridge)
-python3 netaudit.py --switch centro_stella stp check
+# Spanning Tree (full output)
+python3 netaudit.py --switch core_switch stp
 
-# Stato porte (interface brief)
-python3 netaudit.py --switch centro_stella ports
+# Basic STP analysis (TC count, blocking ports, root bridge info)
+python3 netaudit.py --switch core_switch stp check
 
-# Nomi/commenti delle porte
-python3 netaudit.py --switch centro_stella port-names
-python3 netaudit.py --switch centro_stella port-names 2/24   # solo una porta
+# Advanced/Deep STP analysis (Root Guard, TCN Guard, Edge vs OperEdge, expected root)
+python3 netaudit.py --switch core_switch stp detail
 
-# Tabella MAC (filtrabile per porta e/o VLAN)
-python3 netaudit.py --switch centro_stella macs
-python3 netaudit.py --switch centro_stella macs --port 2/14
-python3 netaudit.py --switch centro_stella macs --vlan 2
-python3 netaudit.py --switch centro_stella macs --port 2/14 --vlan 2
+# Port status (interface brief)
+python3 netaudit.py --switch core_switch ports
 
-# Vicini LLDP (topologia)
-python3 netaudit.py --switch centro_stella neighbors
+# Physical layer anomaly check (speed mismatches, MDIX, SFP diagnostics)
+python3 netaudit.py --switch core_switch physical-check
 
-# Log di sistema
-python3 netaudit.py --switch centro_stella logs
+# Port names/comments
+python3 netaudit.py --switch core_switch port-names
+python3 netaudit.py --switch core_switch port-names 2/24   # only one port
+
+# MAC address table (can be filtered by port and/or VLAN)
+python3 netaudit.py --switch core_switch macs
+python3 netaudit.py --switch core_switch macs --port 2/14
+python3 netaudit.py --switch core_switch macs --vlan 2
+python3 netaudit.py --switch core_switch macs --port 2/14 --vlan 2
+
+# LLDP neighbors (topology)
+python3 netaudit.py --switch core_switch neighbors
+
+# System logs (reverse chronological order)
+python3 netaudit.py --switch core_switch logs
+
+# Intelligent Log Analysis (detects STP root changes, port flapping loops, config correlations)
+python3 netaudit.py --switch core_switch log-audit
 ```
 
 ---
 
-## Comandi di modifica
+## Modify Commands
 
-Ogni operazione di scrittura segue questo protocollo:
-1. **Preview** — mostra i comandi che verranno eseguiti
-2. **Conferma** — chiede `Confermare? [s/N]` (default No)
-3. **Esecuzione** — invia i comandi allo switch in config mode
-4. **Verifica** — rilegge la configurazione e mostra il risultato
+Every write operation follows this workflow:
+1. **Preview** — shows the commands that will be executed
+2. **Confirmation** — asks `Confirm? [y/N]` (default is No)
+3. **Execution** — sends commands to the switch in config mode
+4. **Verification** — reads back the configuration and shows the result
 
-Il salvataggio (`write memory`) è sempre un comando esplicito separato e non avviene mai automaticamente.
+Configuration saving (`write memory`) is always a separate, explicit action and is never done automatically.
 
-### VLAN
+### VLAN Management
 
 ```bash
-# Crea VLAN
-python3 netaudit.py --switch centro_stella vlan create 99 NOME_VLAN
+# Create VLAN
+python3 netaudit.py --switch core_switch vlan create 99 VLAN_NAME
 
-# Rinomina VLAN
-python3 netaudit.py --switch centro_stella vlan rename 99 NUOVO_NOME
+# Rename VLAN
+python3 netaudit.py --switch core_switch vlan rename 99 NEW_NAME
 
-# Elimina VLAN
-# (se ci sono porte attive, mostra un avviso prima di chiedere conferma)
-python3 netaudit.py --switch centro_stella vlan delete 99
+# Delete VLAN
+# (if there are active ports in the VLAN, it will show a warning before asking for confirmation)
+python3 netaudit.py --switch core_switch vlan delete 99
 ```
 
-### Porte — assegnazione VLAN
+### Ports — VLAN Assignment
 
 ```bash
-# Imposta porta in access mode (untagged) su una VLAN
-python3 netaudit.py --switch centro_stella port access 1/3 10
+# Set port to access mode (untagged) on a VLAN
+python3 netaudit.py --switch core_switch port access 1/3 10
 
-# Aggiungi porta come tagged su una VLAN
-python3 netaudit.py --switch centro_stella port tag 2/A1 100
+# Add port as tagged on a VLAN
+python3 netaudit.py --switch core_switch port tag 2/A1 100
 
-# Rimuovi porta da tagged su una VLAN
-python3 netaudit.py --switch centro_stella port untag 2/A1 100
+# Remove port from tagged on a VLAN
+python3 netaudit.py --switch core_switch port untag 2/A1 100
 ```
 
-### Porte — nome/commento
+### Ports — Name/Comment
 
 ```bash
-# Imposta nome sulla porta
-python3 netaudit.py --switch centro_stella port set-name 1/2 "AP_Aruba_Ufficio"
+# Set port name
+python3 netaudit.py --switch core_switch port set-name 1/2 "Aruba_AP_Office"
 
-# Rimuovi nome dalla porta (stringa vuota)
-python3 netaudit.py --switch centro_stella port set-name 1/2 ""
+# Remove port name (empty string)
+python3 netaudit.py --switch core_switch port set-name 1/2 ""
 ```
 
-### Salvataggio
+### Saving Configuration
 
 ```bash
-# Salva running-config in startup-config (write memory)
-python3 netaudit.py --switch centro_stella save
+# Save running-config to startup-config (write memory)
+python3 netaudit.py --switch core_switch save
 ```
 
 ---
 
-## Database nmap
+## Nmap Database Integration
 
-Per usare i comandi `inventory`, `port find` e l'arricchimento della tabella MAC, occorre un file XML generato da nmap.
+To use the `inventory`, `port find`, and MAC table enrichment commands, an XML file generated by nmap is required.
 
-### Comando nmap
+### Nmap Command Example
 
 ```bash
 sudo nmap -sS -sU \
@@ -164,66 +176,69 @@ sudo nmap -sS -sU \
   10.168.0.0/20
 ```
 
-- Tempo stimato: ~26 min per una /20 con ~380 host
-- Il file deve chiamarsi **`nmap-output.xml`** e trovarsi nella **directory corrente** da cui si lancia netaudit
+- Estimated time: ~26 min for a /20 with ~380 hosts
+- The file must be named **`nmap-output.xml`** and be located in the **current directory** where netaudit is executed.
 
-In alternativa si può specificare il percorso esplicitamente:
+Alternatively, you can specify the path explicitly:
 
 ```bash
 python3 netaudit.py --nmap-db /path/to/scan.xml inventory
-# oppure
+# or
 export NETAUDIT_NMAP_DB=/path/to/scan.xml
 ```
 
 ---
 
-## Inventario nmap
+## Nmap Inventory Features
 
-Comandi che usano il DB nmap senza connettersi agli switch:
+Commands that use the nmap DB without connecting to the switches:
 
 ```bash
-# Tutti gli host attivi nel DB
+# List all active hosts in the DB
 python3 netaudit.py inventory
 
-# Filtra per OS
+# Filter by OS
 python3 netaudit.py inventory --os win
 python3 netaudit.py inventory --os linux
-python3 netaudit.py inventory --os other      # OS non identificato
+python3 netaudit.py inventory --os other      # Unidentified OS
 
-# Filtra per servizio aperto
+# Filter by open service
 python3 netaudit.py inventory --service ssh
 python3 netaudit.py inventory --service snmp
 python3 netaudit.py inventory --service microsoft-ds
 
-# Scopri quali servizi sono presenti nel DB
+# See a list of all identified services and their host counts
 python3 netaudit.py inventory --list-services
 
-# Trova su quale porta dello switch è connesso un host (IP, hostname o MAC)
-python3 netaudit.py --switch centro_stella port find 10.168.0.3
-python3 netaudit.py --switch centro_stella port find DESKTOP-2G07OBV
-python3 netaudit.py --switch centro_stella port find aa:bb:cc:dd:ee:ff
+# Find which switch port a host is connected to (by IP, hostname, or MAC)
+python3 netaudit.py --switch core_switch port find 10.168.0.3
+python3 netaudit.py --switch core_switch port find DESKTOP-2G07OBV
+python3 netaudit.py --switch core_switch port find aa:bb:cc:dd:ee:ff
 
-# Tabella MAC arricchita con hostname dal DB nmap
-python3 netaudit.py --switch centro_stella macs
+# Detect Rogue Devices / Unmanaged Switches (find multiple MACs on Edge ports)
+python3 netaudit.py --switch core_switch port find --rogue
+
+# MAC table enriched with IP, Hostname, Vendor, and OS from the nmap DB
+python3 netaudit.py --switch core_switch macs
 ```
 
 ---
 
-## Flag --yes (per automazione/LLM)
+## The `--yes` Flag (for Automation/LLMs)
 
-Bypassa la conferma interattiva. Utile per uso programmatico:
+Bypasses interactive confirmation. Useful for programmatic execution:
 
 ```bash
-python3 netaudit.py --switch centro_stella --yes vlan create 99 TEST
-python3 netaudit.py --switch centro_stella --yes port set-name 2/24 "Server-ESXi"
-python3 netaudit.py --switch centro_stella --yes save
+python3 netaudit.py --switch core_switch --yes vlan create 99 TEST
+python3 netaudit.py --switch core_switch --yes port set-name 2/24 "ESXi-Server"
+python3 netaudit.py --switch core_switch --yes save
 ```
 
 ---
 
-## Note operative
+## Operational Notes
 
-- Gli argomenti non validi vengono controllati **prima** di aprire la connessione SSH.
-- La connessione SSH usa `netmiko` in modalità interattiva.
-- Lo switch gestisce il banner HPE e la conferma `[y/n]` in modo trasparente.
-- Il report `diagnose` include: versione, VLAN, porte, STP, LLDP, MAC table, log, running-config.
+- Invalid arguments are checked **before** opening the SSH connection.
+- The SSH connection uses `netmiko` in interactive mode.
+- The switch handles HPE banners and `[y/n]` confirmation transparently.
+- The `diagnose` report includes: version, VLANs, ports, STP (summary), LLDP, MAC table, system logs, and running-config.

@@ -4,7 +4,7 @@ from netmiko import ConnectHandler
 
 
 class Switch:
-    """Wrapper multi-vendor attorno a netmiko ConnectHandler."""
+    """Multi-vendor wrapper around netmiko ConnectHandler."""
 
     def __init__(self, host, user, password, device_type='aruba_osswitch', **kwargs):
         self.host = host
@@ -25,9 +25,9 @@ class Switch:
         self.close()
 
     def connect(self):
-        # Prova le chiavi dall'SSH agent una alla volta. Necessario perché alcuni
-        # server SSH (Mocana, usato da Aruba/HP) chiudono la connessione dopo il
-        # primo fallimento pubkey invece di permettere ulteriori tentativi.
+        # Try keys from the SSH agent one by one. Necessary because some
+        # SSH servers (like Mocana, used by Aruba/HP) close the connection after
+        # the first pubkey failure instead of allowing further attempts.
         agent_keys = []
         try:
             agent_keys = list(paramiko.Agent().get_keys())
@@ -45,8 +45,8 @@ class Switch:
             except Exception as e:
                 last_exc = e
 
-        # Fallback: autenticazione con password (nessuna chiave agent disponibile
-        # o nessuna chiave accettata dallo switch)
+        # Fallback: password authentication (no agent keys available
+        # or no key accepted by the switch)
         try:
             self._conn = ConnectHandler(**self._params)
             self.hostname = self._conn.base_prompt
@@ -61,11 +61,11 @@ class Switch:
                 pass
 
     def run(self, cmd, timeout=30):
-        """Esegue un comando in modalità exec e restituisce l'output pulito."""
+        """Executes a command in exec mode and returns the clean output."""
         return self._conn.send_command(cmd, read_timeout=timeout)
 
     def configure(self, cmds):
-        """Esegue una lista di comandi in config mode. Gestisce conferme [y/n]."""
+        """Executes a list of commands in config mode. Handles [y/n] prompts."""
         self._conn.config_mode()
         output = []
         for cmd in cmds:

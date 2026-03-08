@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""netaudit — Tool di diagnostica e gestione switch di rete (multi-vendor via netmiko)."""
+"""netaudit — Network switch diagnostic and management tool (multi-vendor via netmiko)."""
 
 import argparse
 import os
@@ -29,22 +29,22 @@ def resolve_switch(args):
     if args.switch:
         switches = load_switches()
         if args.switch not in switches:
-            print(f"Errore: switch '{args.switch}' non trovato in switches.yaml")
-            print(f"Switch disponibili: {', '.join(switches.keys())}")
+            print(f"Error: switch '{args.switch}' not found in switches.yaml")
+            print(f"Available switches: {', '.join(switches.keys())}")
             sys.exit(1)
         return switches[args.switch]
     elif args.host:
         if not args.user or not args.password:
-            print("Errore: --host richiede anche --user e --password")
+            print("Error: --host requires both --user and --password")
             sys.exit(1)
         return {'host': args.host, 'user': args.user, 'password': args.password}
     else:
-        print("Errore: specificare --switch <nome> oppure --host/--user/--password")
+        print("Error: specify either --switch <name> or --host/--user/--password")
         sys.exit(1)
 
 
 def get_nmap_db(args):
-    """Carica e restituisce il DB nmap (cached). Restituisce None se non disponibile."""
+    """Loads and returns the nmap DB (cached). Returns None if not available."""
     global _nmap_db_cache
     if _nmap_db_cache is not None:
         return _nmap_db_cache
@@ -66,16 +66,16 @@ def get_nmap_db(args):
         _nmap_db_cache = NmapDB(path)
         return _nmap_db_cache
     except Exception as e:
-        print(f"Avviso: impossibile caricare DB nmap ({path}): {e}", file=sys.stderr)
+        print(f"Warning: unable to load nmap DB ({path}): {e}", file=sys.stderr)
         return None
 
 
-# --- Comandi lettura ---
+# --- Read commands ---
 
 def cmd_diagnose(sw, args):
-    print(f"Avvio diagnosi completa di {sw.hostname} ({sw.host})...")
+    print(f"Starting full diagnosis of {sw.hostname} ({sw.host})...")
     filename = diagnostics.full_diagnose(sw)
-    print(f"\nReport salvato in: {filename}")
+    print(f"\nReport saved to: {filename}")
 
 
 def cmd_config(sw, args):
@@ -87,18 +87,18 @@ def cmd_vlans(sw, args):
 
 
 VLAN_USAGE = textwrap.dedent("""\
-    uso:
-      netaudit vlan <id>                    mostra dettaglio VLAN
-      netaudit vlan create <id> <nome>      crea VLAN (chiede conferma)
-      netaudit vlan rename <id> <nuovo>     rinomina VLAN (chiede conferma)
-      netaudit vlan delete <id>             elimina VLAN (chiede conferma)
+    usage:
+      netaudit vlan <id>                    show detailed VLAN info
+      netaudit vlan create <id> <name>      create VLAN (asks for confirmation)
+      netaudit vlan rename <id> <new_name>  rename VLAN (asks for confirmation)
+      netaudit vlan delete <id>             delete VLAN (asks for confirmation)
 
-    esempi:
-      netaudit --switch centro_stella vlan 2
-      netaudit --switch centro_stella vlan create 99 TEST
-      netaudit --switch centro_stella vlan rename 99 PRODUZIONE
-      netaudit --switch centro_stella vlan delete 99
-      netaudit --switch centro_stella --yes vlan create 99 TEST""")
+    examples:
+      netaudit --switch core_switch vlan 2
+      netaudit --switch core_switch vlan create 99 TEST
+      netaudit --switch core_switch vlan rename 99 PRODUCTION
+      netaudit --switch core_switch vlan delete 99
+      netaudit --switch core_switch --yes vlan create 99 TEST""")
 
 
 def cmd_vlan(sw, args):
@@ -115,8 +115,12 @@ def cmd_vlan(sw, args):
 
 def cmd_stp(sw, args):
     check = args.stp_args and args.stp_args[0] == 'check'
+    detail = args.stp_args and args.stp_args[0] == 'detail'
     if check:
         print(diagnostics.check_stp_health(sw))
+    elif detail:
+        expected_root_mac = sw._params.get('expected_root_mac')
+        print(diagnostics.get_stp_detail(sw, expected_root_mac))
     else:
         print(diagnostics.get_spanning_tree(sw))
 
@@ -126,31 +130,76 @@ def cmd_ports(sw, args):
 
 
 def _enrich_mac_table(raw, nmap_db):
-    """Aggiunge colonna Hostname all'output di show mac-address usando il DB nmap."""
+    """Replaces the raw MAC table with a fully enriched table including nmap data."""
     from lib.nmap_parser import normalize_mac
 
-    mac_re = re.compile(r'^(\s+)([0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4})(\s+\S+\s+\d+.*)', re.IGNORECASE)
-    lines = raw.splitlines()
-    result = []
-    header_done = False
+    # Aruba MAC table format: "  0001c0-17da89     1/23    1   "
+    # MAC is 12 hex chars split by ONE dash: xxxxxx-xxxxxx
+    mac_re = re.compile(
+        r'^\s+([0-9a-f]{6}-[0-9a-f]{6})\s+(\S+)\s+(\d+)',
+        re.IGNORECASE
+    )
 
-    for line in lines:
-        if not header_done and re.search(r'MAC\s+Address', line, re.IGNORECASE):
-            result.append(line + '   Hostname')
-            header_done = True
-        elif header_done and re.match(r'\s*-{5,}', line):
-            result.append(line.rstrip() + '   ' + '-' * 24)
-        else:
-            m = mac_re.match(line)
-            if m:
-                mac = normalize_mac(m.group(2))
-                host = nmap_db.host_by_mac(mac) if mac else None
-                hostname = host['hostname'] if (host and host['hostname']) else ''
-                result.append(line.rstrip() + '   ' + hostname)
-            else:
-                result.append(line)
+    title_lines = []
+    rows = []
+    in_data = False
 
-    return '\n'.join(result)
+    for line in raw.splitlines():
+        if re.search(r'MAC\s+Address', line, re.IGNORECASE):
+            in_data = True
+            continue  # drop original header, we'll build our own
+        if re.match(r'\s*-{5,}', line):
+            continue  # drop separator lines too
+        m = mac_re.match(line)
+        if m and in_data:
+            mac_raw = m.group(1)
+            port = m.group(2)
+            vlan = m.group(3)
+            mac_norm = normalize_mac(mac_raw)
+            host = nmap_db.host_by_mac(mac_norm) if mac_norm else None
+            rows.append({
+                'mac': mac_raw,
+                'port': port,
+                'vlan': vlan,
+                'ip':       host['ip']       if host else '',
+                'hostname': host['hostname'] if host else '',
+                'vendor':   host['vendor']   if host else '',
+                'os':       host['os']       if host else '',
+            })
+        elif not in_data:
+            title_lines.append(line)
+
+    # Column widths (auto-fit)
+    col_mac  = max(18, max((len(r['mac'])      for r in rows), default=0) + 2)
+    col_port = max(10, max((len(r['port'])     for r in rows), default=0) + 2)
+    col_vlan = 6
+    col_ip   = max(16, max((len(r['ip'])       for r in rows), default=0) + 2)
+    col_host = max(24, max((len(r['hostname']) for r in rows), default=0) + 2)
+    col_vend = max(20, max((len(r['vendor'])   for r in rows), default=0) + 2)
+
+    hdr = (f"  {'MAC Address':<{col_mac}} {'Port':<{col_port}} {'VLAN':<{col_vlan}}"
+           f" {'IP':<{col_ip}} {'Hostname':<{col_host}} {'Vendor':<{col_vend}} OS")
+    sep = ('  ' + '-'*17 + ' ' + '-'*9 + ' ' + '-'*5 +
+           ' ' + '-'*(col_ip-1) + ' ' + '-'*(col_host-1) + ' ' + '-'*(col_vend-1) + ' ' + '-'*20)
+
+    lines_out = title_lines + [hdr, sep]
+    for r in rows:
+        lines_out.append(
+            f"  {r['mac']:<{col_mac}} {r['port']:<{col_port}} {r['vlan']:<{col_vlan}}"
+            f" {r['ip']:<{col_ip}} {r['hostname']:<{col_host}} {r['vendor']:<{col_vend}} {r['os']}"
+        )
+
+    return '\n'.join(lines_out)
+
+
+def cmd_physical_check(sw, args):
+    print(f"Running physical layer checks on {sw.hostname}...")
+    print(diagnostics.check_physical(sw))
+
+
+def cmd_log_audit(sw, args):
+    print(f"Analyzing system logs on {sw.hostname}...")
+    print(diagnostics.analyze_logs(sw))
 
 
 def cmd_macs(sw, args):
@@ -175,34 +224,112 @@ def cmd_port_names(sw, args):
 
 
 PORT_USAGE = textwrap.dedent("""\
-    uso:
-      netaudit port access   <porta> <vlan>      imposta porta in access mode (untagged)
-      netaudit port tag      <porta> <vlan>      aggiunge porta come tagged
-      netaudit port untag    <porta> <vlan>      rimuove porta da tagged
-      netaudit port set-name <porta> "<nome>"    imposta nome sulla porta ("" per rimuoverlo)
-      netaudit port find     <ip|hostname|mac>   trova su quale porta è connesso un host
+    usage:
+      netaudit port access   <port> <vlan>      set port to access mode (untagged)
+      netaudit port tag      <port> <vlan>      add port as tagged
+      netaudit port untag    <port> <vlan>      remove port from tagged
+      netaudit port set-name <port> "<name>"    set port name/comment ("" to remove it)
+      netaudit port find     <ip|hostname|mac>  find which port a host is connected to
+      netaudit port find --rogue                detect unmanaged switches (multi-MAC on non-edge)
 
-    esempi:
-      netaudit --switch centro_stella port access 1/3 10
-      netaudit --switch centro_stella port tag 2/A1 100
-      netaudit --switch centro_stella port set-name 1/2 "AP_Aruba_Ufficio"
-      netaudit --switch centro_stella port set-name 1/2 ""
-      netaudit --switch centro_stella --yes port set-name 2/24 "TEST"
-      netaudit --switch centro_stella port find 10.168.0.3
-      netaudit --switch centro_stella port find DESKTOP-2G07OBV""")
+    examples:
+      netaudit --switch core_switch port access 1/3 10
+      netaudit --switch core_switch port tag 2/A1 100
+      netaudit --switch core_switch port set-name 1/2 "Aruba_AP_Office"
+      netaudit --switch core_switch port set-name 1/2 ""
+      netaudit --switch core_switch --yes port set-name 2/24 "TEST"
+      netaudit --switch core_switch port find 10.168.0.3
+      netaudit --switch core_switch port find DESKTOP-2G07OBV
+      netaudit --switch core_switch port find --rogue""")
 
 
-def cmd_port_find(sw, target, args):
-    """Trova su quale porta dello switch è connesso un host (tramite correlazione MAC/nmap)."""
+def cmd_port_find(sw, args):
+    """Finds which port a host is connected to, or detects rogue devices."""
     from lib.nmap_parser import normalize_mac
+    from collections import defaultdict
+    import re
+
+    # Parse args for find subset
+    rogue_mode = '--rogue' in args.port_args
+    targets = [a for a in args.port_args[1:] if a != '--rogue']
+    
+    if rogue_mode:
+        print(f"Scanning MAC table on {sw.hostname} for rogue devices (multi-MAC on non-uplink ports)...")
+        raw_macs = diagnostics.get_mac_table(sw)
+        
+        # Parse MAC table to count MACs per port
+        # Aruba format: xxxxxx-xxxxxx (12 hex chars, single dash)
+        mac_re = re.compile(r'^(\s+)([0-9a-f]{6}-[0-9a-f]{6})(\s+)(\S+)\s+(\d+)', re.IGNORECASE)
+        line_re = re.compile(r'^(\s+)([0-9a-f]{6}-[0-9a-f]{6})')
+        
+        macs_per_port = defaultdict(list)
+        for line in raw_macs.splitlines():
+            if line_re.match(line):
+                m = mac_re.match(line)
+                if m:
+                    mac = normalize_mac(m.group(2))
+                    port = m.group(4).strip()
+                    macs_per_port[port].append(mac)
+
+        # Get STP detail to know which ports are Edge
+        stp_detail = sw.run('show spanning-tree detail')
+        edge_ports = set()
+        current_port = None
+        for line in stp_detail.splitlines():
+            m_port = re.match(r'^\s*Port\s*:\s*([\w/]+)', line)
+            if m_port:
+                current_port = m_port.group(1)
+            elif current_port and re.match(r'.*OperEdgePort\s*:\s*Yes', line, re.IGNORECASE):
+                edge_ports.add(current_port)
+
+        rogues_found = False
+        nmap_db = get_nmap_db(args)
+        
+        for port, macs in macs_per_port.items():
+            # A rogue device is suspected if a port has multiple MACs AND is marked as an Edge port
+            # (If it's not an Edge port, it's likely a legitimate uplink/switch)
+            if len(macs) > 1 and port in edge_ports:
+                rogues_found = True
+                print(f"\n[!] POTENTIAL ROGUE DEVICE on Port {port}")
+                print(f"    Reason: Port is OperEdge but learned {len(macs)} MAC addresses.")
+                print(f"    MACs connected:")
+                # Print header for MACs connected to this rogue port
+                print(f"      {'MAC Address':<20} {'IP':<16} {'Hostname':<30} {'Vendor':<20} {'OS'}")
+                print(f"      {'-'*20:<20} {'-'*16:<16} {'-'*30:<30} {'-'*20:<20} {'-'*20:<20}")
+
+                for mac in macs:
+                    ip = ""
+                    hostname = ""
+                    vendor = ""
+                    os_info = ""
+                    if nmap_db:
+                        h = nmap_db.host_by_mac(mac)
+                        if h:
+                            ip = h['ip'] or ""
+                            hostname = h['hostname'] or ""
+                            vendor = h['vendor'] or ""
+                            os_info = h['os'] or ""
+                    print(f"      {mac:<20} {ip:<16} {hostname:<30} {vendor:<20} {os_info}")
+
+        if not rogues_found:
+            print("\nNo rogue devices detected (no multi-MAC Edge ports found).")
+            
+        return
+
+    # Normal target-based find
+    if not targets:
+        print(f"Error: 'port find' requires a target <ip|hostname|mac> (or --rogue)\n\n{PORT_USAGE}")
+        return
+        
+    target = targets[0]
 
     nmap_db = get_nmap_db(args)
     if not nmap_db:
-        print("Errore: nessun DB nmap disponibile.")
-        print("Specifica --nmap-db <path> o imposta la variabile NETAUDIT_NMAP_DB.")
+        print("Error: no nmap DB available.")
+        print("Specify --nmap-db <path> or set the NETAUDIT_NMAP_DB environment variable.")
         return
 
-    # Risolvi target → host nmap
+    # Resolve target → nmap host
     host = None
     if re.match(r'^\d+\.\d+\.\d+\.\d+$', target):
         host = nmap_db.host_by_ip(target)
@@ -213,15 +340,15 @@ def cmd_port_find(sw, target, args):
         host = next((h for h in nmap_db.all_hosts() if h['hostname'].lower() == target_lower), None)
 
     if not host:
-        print(f"Host '{target}' non trovato nel DB nmap.")
+        print(f"Host '{target}' not found in nmap DB.")
         return
 
     if not host['mac']:
-        print(f"Host {host['ip']} trovato nel DB nmap ma senza MAC address.")
+        print(f"Host {host['ip']} found in nmap DB but without MAC address.")
         return
 
     label = host['hostname'] or host['ip']
-    print(f"Ricerca MAC {host['mac']} ({label}) nella tabella dello switch...")
+    print(f"Searching for MAC {host['mac']} ({label}) in the switch MAC table...")
 
     raw = diagnostics.get_mac_table(sw)
 
@@ -237,25 +364,27 @@ def cmd_port_find(sw, target, args):
                 break
 
     if found:
-        print(f"\nHost trovato:")
+        print(f"\nHost found:")
         print(f"  IP:       {host['ip']}")
         print(f"  MAC:      {found['mac_raw']}")
         if host['hostname']:
             print(f"  Hostname: {host['hostname']}")
+        if host['vendor']:
+            print(f"  Vendor:   {host['vendor']}")
         if host['os']:
             print(f"  OS:       {host['os']}")
         print(f"  Switch:   {sw.hostname}")
-        print(f"  Porta:    {found['port']}")
+        print(f"  Port:     {found['port']}")
         print(f"  VLAN:     {found['vlan']}")
     else:
-        print(f"\nMAC {host['mac']} ({label}) non trovato nella tabella MAC dello switch.")
-        print("Il dispositivo potrebbe essere connesso a un altro switch o essere offline.")
+        print(f"\nMAC {host['mac']} ({label}) not found in the switch MAC table.")
+        print("The device might be connected to another switch or be offline.")
 
 
 def cmd_port(sw, args):
     action = args.port_args[0]
     if action == 'find':
-        cmd_port_find(sw, args.port_args[1], args)
+        cmd_port_find(sw, args)
     else:
         port = args.port_args[1]
         if action == 'set-name':
@@ -273,21 +402,27 @@ def cmd_save(sw, args):
 
 
 def cmd_traverse(sw, args):
-    print("Traversata multi-switch via LLDP: funzione non ancora implementata.")
-    print("Neighbors locali:")
+    print("Multi-switch traversal via LLDP: feature not yet implemented.")
+    print("Local neighbors:")
     print(diagnostics.get_lldp_neighbors(sw))
 
 
-# --- Comando inventory (nessuna connessione switch) ---
+def cmd_query(sw, args):
+    """Executes arbitrary read-only commands."""
+    print(f"Executing: {args.command}\n" + "-"*40)
+    print(sw.run(args.command))
+
+
+# --- Inventory command (no switch connection) ---
 
 INVENTORY_USAGE = textwrap.dedent("""\
-    uso:
-      netaudit inventory                         tutti gli host attivi
-      netaudit inventory --os win|linux|other    filtra per OS
-      netaudit inventory --service <nome>        filtra per servizio aperto
-      netaudit inventory --list-services         mostra tutti i servizi disponibili nel DB
+    usage:
+      netaudit inventory                         all active hosts
+      netaudit inventory --os win|linux|other    filter by OS
+      netaudit inventory --service <name>        filter by open service
+      netaudit inventory --list-services         show all available services in DB
 
-    esempi:
+    examples:
       netaudit inventory
       netaudit inventory --os win
       netaudit inventory --service ssh
@@ -296,22 +431,22 @@ INVENTORY_USAGE = textwrap.dedent("""\
 
 
 def cmd_inventory(sw, args):
-    """Mostra inventario host attivi dal DB nmap (nessuna connessione switch)."""
+    """Shows active host inventory from nmap DB (no switch connection)."""
     nmap_db = get_nmap_db(args)
     if not nmap_db:
-        print("Errore: nessun DB nmap disponibile.")
-        print("Specifica --nmap-db <path> o imposta la variabile NETAUDIT_NMAP_DB.")
-        print("File cercato: nmap-output.xml nella directory corrente.")
+        print("Error: no nmap DB available.")
+        print("Specify --nmap-db <path> or set the NETAUDIT_NMAP_DB environment variable.")
+        print("Searched for: nmap-output.xml in the current directory.")
         return
 
     hosts = nmap_db.all_hosts()
 
     if args.list_services:
         counts = Counter(svc['name'] for h in hosts for svc in h['services'])
-        print(f"Servizi nel DB nmap ({os.path.basename(nmap_db.path)}):\n")
+        print(f"Services in nmap DB ({os.path.basename(nmap_db.path)}):\n")
         for name, count in counts.most_common():
-            print(f"  {name:<20} {count:>4} host")
-        print(f"\nUsa --service <nome> per filtrare gli host.")
+            print(f"  {name:<20} {count:>4} hosts")
+        print(f"\nUse --service <name> to filter hosts.")
         return
 
     if args.os_filter:
@@ -329,22 +464,22 @@ def cmd_inventory(sw, args):
         svc_filter = args.service.lower()
         hosts = [h for h in hosts if any(s['name'].lower() == svc_filter for s in h['services'])]
 
-    print(f"DB nmap: {nmap_db.path}")
+    print(f"Nmap DB: {nmap_db.path}")
     if args.os_filter or args.service:
-        filtri = []
+        filters = []
         if args.os_filter:
-            filtri.append(f"OS={args.os_filter}")
+            filters.append(f"OS={args.os_filter}")
         if args.service:
-            filtri.append(f"service={args.service}")
-        print(f"Filtri: {', '.join(filtri)}")
+            filters.append(f"service={args.service}")
+        print(f"Filters: {', '.join(filters)}")
 
     if not hosts:
-        print("Nessun host trovato con i filtri specificati.")
+        print("No hosts found matching the specified filters.")
         return
 
-    print(f"Host trovati: {len(hosts)}\n")
+    print(f"Found hosts: {len(hosts)}\n")
 
-    # Calcola larghezze colonne
+    # Column widths
     col_ip = max(15, max(len(h['ip']) for h in hosts) + 1)
     col_mac = 19
     col_vendor = min(20, max((len(h['vendor']) for h in hosts if h['vendor']), default=6) + 1)
@@ -370,79 +505,83 @@ def build_parser():
 
     parser = argparse.ArgumentParser(
         prog='netaudit',
-        description='Tool di diagnostica e gestione switch Aruba',
+        description='Network switch diagnostic and management tool',
         formatter_class=R,
         epilog=textwrap.dedent("""\
-            lettura (sola lettura, nessuna modifica):
-              diagnose                        diagnosi completa, salva report su file
-              config                          running-config completa
-              vlans                           lista tutte le VLAN
-              vlan <id>                       dettaglio VLAN specifica
-              stp                             Spanning Tree completo
-              stp check                       analisi STP: TC count, porte blocking, root bridge
-              ports                           stato porte (interface brief)
-              macs [--port P] [--vlan V]      tabella MAC, filtrabile per porta o VLAN
-              neighbors                       vicini LLDP (topologia)
-              logs                            log di sistema
-              port-names                      nomi/commenti configurati su ogni porta
+            read-only (no modifications):
+              diagnose                        full diagnosis, saves timestamped report
+              config                          full running-config
+              vlans                           list all VLANs
+              vlan <id>                       specific VLAN details
+              stp                             Spanning Tree full output
+              stp check                       STP analysis: TC count, blocking ports, root bridge
+              ports                           port status (interface brief)
+              macs [--port P] [--vlan V]      MAC table, filtered by port or VLAN
+              neighbors                       LLDP neighbors (topology)
+              logs                            system logs
+              log-audit                       intelligent log analysis (STP, flapping, configs)
+              port-names                      names/comments configured on each port
+              query "<cmd>"                   run arbitrary read-only commands
 
-            modifica (mostrano preview e chiedono conferma; usare --yes per bypassare):
-              vlan create <id> <nome>         crea VLAN
-              vlan delete <id>                elimina VLAN
-              port access   <porta> <vlan>    imposta porta in access mode (untagged)
-              port tag      <porta> <vlan>    aggiunge porta come tagged
-              port untag    <porta> <vlan>    rimuove porta da tagged
-              port set-name <porta> "<nome>"  imposta nome ("" per rimuoverlo)
-              save                            salva configurazione (write memory)
+            modify (shows preview and asks for confirmation; use --yes to bypass):
+              vlan create <id> <name>         create VLAN
+              vlan delete <id>                delete VLAN
+              port access   <port> <vlan>     set port to access mode (untagged)
+              port tag      <port> <vlan>     add port as tagged
+              port untag    <port> <vlan>     remove port from tagged
+              port set-name <port> "<name>"   set name ("" to remove it)
+              save                            save configuration (write memory)
 
-            nmap (nessuna connessione switch):
-              inventory [--os win|linux|other] [--service <nome>] [--list-services]
-                                              inventario host attivi dal DB nmap
+            nmap (no switch connection):
+              inventory [--os win|linux|other] [--service <name>] [--list-services]
+                                              active host inventory from nmap DB
 
             nmap + switch:
-              port find <ip|hostname|mac>     trova su quale porta è connesso un host
-              macs                            tabella MAC arricchita con hostname nmap
+              port find <ip|hostname|mac>     find which port a host is connected to
+              port find --rogue               detect unmanaged switches (multi-MAC active on Edge ports)
+              macs                            MAC table enriched with nmap hostname/IP/vendor
 
-            esempi:
-              netaudit --switch centro_stella vlans
-              netaudit --switch centro_stella macs --port 2/14
-              netaudit --switch centro_stella port find 10.168.0.3
-              netaudit --switch centro_stella port find DESKTOP-2G07OBV
+            examples:
+              netaudit --switch core_switch vlans
+              netaudit --switch core_switch macs --port 2/14
+              netaudit --switch core_switch port find 10.168.0.3
+              netaudit --switch core_switch port find DESKTOP-2G07OBV
+              netaudit --switch core_switch query "show spanning-tree detail 1/1"
               netaudit inventory
-              netaudit inventory --os WIN
+              netaudit inventory --os win
               netaudit inventory --service rdp
               netaudit --host 10.168.13.100 --user admin --password secret vlans
         """),
     )
-    parser.add_argument('--switch', metavar='NOME',
-                        help='Nome switch da switches.yaml')
+    parser.add_argument('--switch', metavar='NAME',
+                        help='Switch name from switches.yaml')
     parser.add_argument('--host', metavar='IP',
-                        help='IP/hostname switch (alternativa a --switch)')
-    parser.add_argument('--user', metavar='USER', help='Username SSH')
-    parser.add_argument('--password', metavar='PASS', help='Password SSH')
+                        help='Switch IP/hostname (alternative to --switch)')
+    parser.add_argument('--user', metavar='USER', help='SSH Username')
+    parser.add_argument('--password', metavar='PASS', help='SSH Password')
     parser.add_argument('--yes', action='store_true',
-                        help='Bypassa conferma interattiva (per automazione/LLM)')
+                        help='Bypass interactive confirmation (for automation/LLM)')
     parser.add_argument('--nmap-db', metavar='PATH', dest='nmap_db',
-                        help='Percorso al file XML nmap (default: auto-detect map_rete*.xml)')
+                        help='Path to nmap XML file (default: auto-detect map_rete*.xml)')
 
-    sub = parser.add_subparsers(dest='cmd', metavar='COMANDO')
+    sub = parser.add_subparsers(dest='cmd', metavar='COMMAND')
     sub.required = True
 
     sub.add_parser('diagnose', formatter_class=R,
-                   help='Diagnosi completa — salva report con timestamp su file',
-                   description='Esegue tutti i comandi di lettura e salva il report in un file\n'
-                               'diagnose_<hostname>_<timestamp>.txt nella directory corrente.')
+                   help='Full diagnosis — saves timestamped report to file',
+                   description='Runs all read-only commands and saves a report to\n'
+                               'diagnose_<hostname>_<timestamp>.txt in the current directory.')
 
     sub.add_parser('config', formatter_class=R,
-                   help='Mostra running-config completa',
-                   description='Esegue "show running-config" e stampa l\'output.')
+                   help='Show full running-config',
+                   description='Runs "show running-config" and prints output.')
 
     sub.add_parser('vlans', formatter_class=R,
-                   help='Elenca tutte le VLAN configurate',
-                   description='Esegue "show vlan" e stampa la lista di tutte le VLAN.')
+                   help='List all configured VLANs',
+                   description='Runs "show vlan" and prints the list of all VLANs.')
 
     sub.add_parser('vlan', formatter_class=R,
-                   help='Mostra o gestisce una VLAN',
+                   help='Show or manage a VLAN',
                    description=VLAN_USAGE,
                    ).add_argument('vlan_args', nargs='*', metavar='ARGS',
                                   help='id | create <id> <nome> | delete <id>')
@@ -450,82 +589,97 @@ def build_parser():
     stp_p = sub.add_parser('stp', formatter_class=R,
                             help='Spanning Tree Protocol',
                             description=textwrap.dedent("""\
-                                Mostra o analizza lo Spanning Tree (MSTP).
+                                Show or analyze Spanning Tree (MSTP).
 
-                                uso:
-                                  netaudit stp          output completo di "show spanning-tree"
-                                  netaudit stp check    analisi automatica: segnala TC count elevato,
-                                                        porte in Blocking/Discarding, info root bridge"""))
+                                usage:
+                                  netaudit stp          full output of "show spanning-tree"
+                                  netaudit stp check    automatic analysis: alerts for high TC count,
+                                                        ports in Blocking/Discarding, root bridge info
+                                  netaudit stp detail   deep analysis parsing per-port Edge/Guard status
+                                                        and checking root bridge MAC against expected"""))
     stp_p.add_argument('stp_args', nargs='*', metavar='ARGS',
-                       help='[check]')
+                       help='[check|detail]')
 
     sub.add_parser('ports', formatter_class=R,
-                   help='Stato delle porte',
-                   description='Esegue "show interface brief": stato, velocità, modalità di ogni porta.')
+                   help='Port status',
+                   description='Runs "show interface brief": status, speed, mode for each port.')
+
+    sub.add_parser('physical-check', formatter_class=R,
+                   help='Physical layer anomaly detection',
+                   description='Detects speed/duplex mismatches, non-Auto MDI/MDIX, and reads SFP DDM metrics.')
 
     macs_p = sub.add_parser('macs', formatter_class=R,
-                             help='Tabella MAC address (arricchita con hostname nmap se disponibile)',
+                             help='MAC address table (enriched with nmap hostname if available)',
                              description=textwrap.dedent("""\
-                                 Mostra la tabella MAC address dello switch.
-                                 Se il DB nmap è disponibile, aggiunge una colonna Hostname.
+                                 Shows the switch MAC address table.
+                                 If the nmap DB is available, adds a Hostname column.
 
-                                 uso:
-                                   netaudit macs                        tutta la tabella
-                                   netaudit macs --port 1/3             MAC appresi sulla porta 1/3
-                                   netaudit macs --vlan 2               MAC nella VLAN 2
-                                   netaudit macs --port 1/3 --vlan 2   combinato"""))
-    macs_p.add_argument('--port', metavar='PORTA', help='Filtra per porta (es. 1/3, 2/A1)')
-    macs_p.add_argument('--vlan', metavar='VLAN', help='Filtra per VLAN (es. 2)')
+                                 usage:
+                                   netaudit macs                        full table
+                                   netaudit macs --port 1/3             MACs learned on port 1/3
+                                   netaudit macs --vlan 2               MACs in VLAN 2
+                                   netaudit macs --port 1/3 --vlan 2    combined filters"""))
+    macs_p.add_argument('--port', metavar='PORT', help='Filter by port (e.g. 1/3, 2/A1)')
+    macs_p.add_argument('--vlan', metavar='VLAN', help='Filter by VLAN (e.g. 2)')
 
     pn = sub.add_parser('port-names', formatter_class=R,
-                        help='Mostra i nomi/commenti delle porte',
+                        help='Show configured port names/comments',
                         description=textwrap.dedent("""\
-                            Mostra i nomi/commenti configurati sulle porte.
+                            Shows names/comments configured on the ports.
 
-                            uso:
-                              netaudit port-names             lista tutte le porte
-                              netaudit port-names 2/24        mostra solo la porta 2/24"""))
-    pn.add_argument('port', nargs='?', default=None, metavar='PORTA',
-                    help='Porta specifica (opzionale, es. 2/24)')
+                            usage:
+                              netaudit port-names             list all ports
+                              netaudit port-names 2/24        show only port 2/24"""))
+    pn.add_argument('port', nargs='?', default=None, metavar='PORT',
+                    help='Specific port (optional, e.g. 2/24)')
 
     sub.add_parser('neighbors', formatter_class=R,
-                   help='Vicini LLDP',
-                   description='Esegue "show lldp info remote-device": mostra i dispositivi\n'
-                               'connessi rilevati via LLDP (switch, AP, ecc.).')
+                   help='LLDP neighbors',
+                   description='Runs "show lldp info remote-device": shows connected\n'
+                               'devices detected via LLDP (switches, APs, etc.).')
 
     sub.add_parser('logs', formatter_class=R,
-                   help='Log di sistema',
-                   description='Esegue "show log -r": log di sistema in ordine cronologico inverso.')
+                   help='System logs',
+                   description='Runs "show log -r": system logs in reverse chronological order.')
+
+    sub.add_parser('log-audit', formatter_class=R,
+                   help='Intelligent log analysis',
+                   description='Analyzes system logs for STP route changes, port flapping loops,\n'
+                               'and correlates configuration changes with immediate system issues.')
 
     sub.add_parser('port', formatter_class=R,
-                   help='Configura porta o cerca host per porta',
+                   help='Configure port or find host by port',
                    description=PORT_USAGE,
-                   ).add_argument('port_args', nargs='*', metavar='ARGS',
-                                  help='access|tag|untag|set-name <porta> <vlan>  oppure  find <ip|hostname|mac>')
+                   ).add_argument('port_args', nargs=argparse.REMAINDER, metavar='ARGS',
+                                  help='access|tag|untag|set-name <port> <vlan>  or  find <ip|hostname|mac> [--rogue]')
 
     sub.add_parser('save', formatter_class=R,
-                   help='Salva configurazione (write memory)',
-                   description='Esegue "write memory" per rendere permanente la configurazione corrente.\n'
-                               'Chiede conferma prima di procedere.')
+                   help='Save configuration (write memory)',
+                   description='Runs "write memory" to make the current configuration permanent.\n'
+                               'Asks for confirmation before proceeding.')
 
     traverse_p = sub.add_parser('traverse', formatter_class=R,
-                                 help='[Futuro] Traversata topologia multi-switch via LLDP',
-                                 description='Discovery automatico della topologia di rete partendo\n'
-                                             'da uno switch e seguendo i vicini LLDP. Non ancora implementato.')
-    traverse_p.add_argument('--start', metavar='SWITCH', help='Switch di partenza (default: quello specificato)')
+                                 help='[Future] Multi-switch topology traversal via LLDP',
+                                 description='Automatic discovery of the network topology starting\n'
+                                             'from a switch and following LLDP neighbors. Not yet implemented.')
+    traverse_p.add_argument('--start', metavar='SWITCH', help='Starting switch (default: the specified one)')
     traverse_p.add_argument('--depth', type=int, default=2, metavar='N',
-                             help='Profondita\' di discovery (default: 2)')
+                             help='Discovery depth (default: 2)')
 
     inv_p = sub.add_parser('inventory', formatter_class=R,
-                            help='Inventario host attivi dal DB nmap (nessuna connessione switch)',
+                            help='Active host inventory from nmap DB (no switch connection)',
                             description=INVENTORY_USAGE)
     inv_p.add_argument('--os', dest='os_filter', metavar='OS',
                        choices=['win', 'linux', 'other'],
-                       help='Filtra per OS: win, linux, other')
+                       help='Filter by OS: win, linux, other')
     inv_p.add_argument('--service', metavar='SVC',
-                       help='Filtra per servizio aperto (es. ssh, rdp, smb, snmp)')
+                       help='Filter by open service (e.g. ssh, rdp, smb, snmp)')
     inv_p.add_argument('--list-services', action='store_true',
-                       help='Elenca tutti i servizi aperti nel DB nmap con conteggio host')
+                       help='List all open services in the nmap DB with host count')
+
+    query_p = sub.add_parser('query', formatter_class=R,
+                             help='Execute arbitrary read-only commands')
+    query_p.add_argument('command', help='The command to execute (in quotes, e.g. "show version")')
 
     return parser
 
@@ -537,32 +691,35 @@ COMMANDS = {
     'vlan': cmd_vlan,
     'stp': cmd_stp,
     'ports': cmd_ports,
+    'physical-check': cmd_physical_check,
     'port-names': cmd_port_names,
     'macs': cmd_macs,
     'neighbors': cmd_neighbors,
     'logs': cmd_logs,
+    'log-audit': cmd_log_audit,
     'port': cmd_port,
     'save': cmd_save,
     'traverse': cmd_traverse,
     'inventory': cmd_inventory,
+    'query': cmd_query,
 }
 
-# Comandi che non richiedono connessione switch
+# Commands that do not require switch connection
 SWITCH_NOT_REQUIRED = {'inventory'}
 
 
 def validate_args(args):
-    """Valida gli argomenti prima di aprire la connessione SSH."""
+    """Validates arguments before opening the SSH connection."""
     if args.cmd == 'vlan':
         vlan_args = args.vlan_args
         if not vlan_args:
             print(VLAN_USAGE, file=sys.stderr)
             sys.exit(1)
         if vlan_args[0] in ('create', 'rename') and len(vlan_args) < 3:
-            print(f"Errore: 'vlan {vlan_args[0]}' richiede <id> e <nome>\n\n{VLAN_USAGE}", file=sys.stderr)
+            print(f"Error: 'vlan {vlan_args[0]}' requires <id> and <name>\n\n{VLAN_USAGE}", file=sys.stderr)
             sys.exit(1)
         if vlan_args[0] == 'delete' and len(vlan_args) < 2:
-            print(f"Errore: 'vlan delete' richiede <id>\n\n{VLAN_USAGE}", file=sys.stderr)
+            print(f"Error: 'vlan delete' requires <id>\n\n{VLAN_USAGE}", file=sys.stderr)
             sys.exit(1)
 
     if args.cmd == 'port':
@@ -571,14 +728,14 @@ def validate_args(args):
             print(PORT_USAGE, file=sys.stderr)
             sys.exit(1)
         if port_args[0] not in ('access', 'tag', 'untag', 'set-name', 'find'):
-            print(f"Errore: sottocomando '{port_args[0]}' non riconosciuto\n\n{PORT_USAGE}", file=sys.stderr)
+            print(f"Error: sub-command '{port_args[0]}' not recognized\n\n{PORT_USAGE}", file=sys.stderr)
             sys.exit(1)
         if port_args[0] == 'find':
-            if len(port_args) < 2:
-                print(f"Errore: 'port find' richiede <ip|hostname|mac>\n\n{PORT_USAGE}", file=sys.stderr)
+            if len(port_args) < 2 and '--rogue' not in port_args:
+                print(f"Error: 'port find' requires <ip|hostname|mac> or --rogue\n\n{PORT_USAGE}", file=sys.stderr)
                 sys.exit(1)
         elif len(port_args) < 3:
-            print(f"Errore: 'port {port_args[0]}' richiede <porta> e <argomento>\n\n{PORT_USAGE}", file=sys.stderr)
+            print(f"Error: 'port {port_args[0]}' requires <port> and <argument>\n\n{PORT_USAGE}", file=sys.stderr)
             sys.exit(1)
 
 
@@ -595,16 +752,16 @@ def main():
     sw_config = resolve_switch(args)
     handler = COMMANDS[args.cmd]
 
-    print(f"Connessione a {sw_config['host']}...")
+    print(f"Connecting to {sw_config['host']}...")
     try:
         with Switch(**sw_config) as sw:
-            print(f"Connesso a {sw.hostname}\n")
+            print(f"Connected to {sw.hostname}\n")
             handler(sw, args)
     except ConnectionError as e:
-        print(f"Errore di connessione: {e}")
+        print(f"Connection error: {e}")
         sys.exit(1)
     except KeyboardInterrupt:
-        print("\nInterrotto dall'utente.")
+        print("\nInterrupted by user.")
         sys.exit(1)
 
 
