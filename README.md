@@ -141,7 +141,8 @@ netaudit --switch core_switch stp check
 # Deep STP structural analysis (Root Guard, TCN Guard, Edge vs OperEdge mismatches)
 netaudit --switch core_switch stp detail
 
-# Detect anomalies in physical media (speed mismatches, MDIX, Transceiver health)
+# Detect anomalies in physical media (half-duplex links, ports with speed/duplex
+# pinned in the config, SFP receive power / temperature / voltage alarms)
 netaudit --switch core_switch physical-check
 
 # Audit log streams over time for loops, flapping events, and topology changes

@@ -19,7 +19,7 @@ EPILOG = textwrap.dedent("""\
       stp check                       STP analysis: TC count, blocking ports, root bridge
       stp detail                      per-port Edge/Guard status, root bridge check
       ports                           port status (interface brief)
-      physical-check                  speed/duplex/MDIX anomalies and SFP DDM metrics
+      physical-check                  duplex/speed anomalies, pinned port settings, SFP DDM
       macs [--port P] [--vlan V]      MAC table, filtered by port or VLAN
       neighbors                       LLDP neighbors (topology)
       logs                            system logs

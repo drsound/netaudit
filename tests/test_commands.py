@@ -128,13 +128,43 @@ def test_port_find_reports_a_host_absent_from_the_mac_table(use_nmap_db, capsys)
     assert 'not found in the switch MAC table' in capsys.readouterr().out
 
 
-def test_port_find_without_an_nmap_db_explains_itself(no_nmap_db, capsys):
+def test_port_find_without_an_nmap_db_explains_itself_and_exits_nonzero(no_nmap_db, capsys):
+    """Missing DB is a failure: returning 0 hid it from any calling script."""
     sw = FakeSwitch(outputs={'show mac-address': RAW_MAC_TABLE})
     args = build_parser().parse_args(['--switch', 'core', 'port', 'find', '10.0.0.5'])
 
-    port_cmd._find_host(sw, args, '10.0.0.5')
+    with pytest.raises(SystemExit) as exc:
+        port_cmd._find_host(sw, args, '10.0.0.5')
 
+    assert exc.value.code == 1
     assert 'no nmap DB available' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('target', [
+    '0001c0-17da89',      # the notation `netaudit macs` prints
+    '00:01:c0:17:da:89',  # colon form
+    '0001C017DA89',       # bare, upper case
+])
+def test_port_find_resolves_a_mac_in_any_notation(use_nmap_db, capsys, target):
+    """The MAC check required a separator at index 2, so the Aruba
+    xxxxxx-xxxxxx form was treated as a hostname and never resolved."""
+    sw = FakeSwitch(outputs={'show mac-address': RAW_MAC_TABLE})
+    args = build_parser().parse_args(['--switch', 'core', 'port', 'find', target])
+
+    port_cmd._find_host(sw, args, target)
+    out = capsys.readouterr().out
+
+    assert 'Host found:' in out
+    assert 'Port:     1/23' in out
+
+
+def test_port_find_still_prefers_ip_over_mac_interpretation(use_nmap_db, capsys):
+    sw = FakeSwitch(outputs={'show mac-address': RAW_MAC_TABLE})
+    args = build_parser().parse_args(['--switch', 'core', 'port', 'find', '10.0.0.9'])
+
+    port_cmd._find_host(sw, args, '10.0.0.9')
+
+    assert 'Port:     2/A1' in capsys.readouterr().out
 
 
 def test_find_rogues_flags_only_multi_mac_edge_ports(monkeypatch, no_nmap_db, capsys):

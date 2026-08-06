@@ -1,6 +1,8 @@
 import re
 from datetime import datetime
 
+from netaudit.nmap_parser import normalize_mac
+
 
 def get_running_config(sw):
     return sw.run('show running-config', timeout=120)
@@ -160,10 +162,12 @@ def check_stp_health(sw):
     if root_mac and bridge_mac and root_mac.group(1) == bridge_mac.group(1):
         info.append("This switch IS the Root Bridge")
 
-    # Look for topology change counters
-    tc_count = re.search(r'(?:Topology Change Count|TCN Count)\s*[:\s]+(\d+)', output, re.IGNORECASE)
+    # Look for topology change counters. The switch groups thousands
+    # ("530,618"), so a bare \d+ stopped at the first comma and reported 530.
+    tc_count = re.search(r'(?:Topology Change Count|TCN Count)\s*[:\s]+([\d,]+)',
+                         output, re.IGNORECASE)
     if tc_count:
-        count = int(tc_count.group(1))
+        count = int(tc_count.group(1).replace(',', ''))
         if count > 100:
             warnings.append(f"WARNING: High Topology Change Count: {count} (possible STP loop)")
         else:
@@ -209,11 +213,28 @@ def check_stp_health(sw):
 _STP_PORT_FLAGS = {
     'admin_edge': 'AdminEdgePort',
     'oper_edge': 'OperEdgePort',
-    'root_guard': 'RootGuard',
-    'tcn_guard': 'TCNGuard',
-    'bpdu_protect': 'BPDUProtection',
-    'loop_guard': 'LoopGuard',
+    'root_guard': 'Root Guard',
+    'tcn_guard': 'TCN Guard',
+    'loop_guard': 'Loop Guard',
+    'bpdu_protect': 'BPDU Protection',
+    'bpdu_filter': 'BPDU Filtering',
+    'pvst_protect': 'PVST Protection',
+    'pvst_filter': 'PVST Filtering',
 }
+
+#: The guards worth calling out per port, in the order they are reported.
+_STP_GUARDS = ('root_guard', 'tcn_guard', 'loop_guard', 'bpdu_protect',
+               'bpdu_filter', 'pvst_protect', 'pvst_filter')
+
+#: Labels are matched with all whitespace removed. Firmware revisions disagree
+#: on whether the label reads "RootGuard" or "Root Guard", and the compact
+#: spelling this table used to hold matched nothing on any switch tested — so
+#: four of the six flags were silently never parsed.
+_STP_FLAG_BY_LABEL = {re.sub(r'\s+', '', label).lower(): key
+                      for key, label in _STP_PORT_FLAGS.items()}
+
+#: "Label : Value" line inside a port block.
+_STP_KV_RE = re.compile(r'\s*([A-Za-z][A-Za-z0-9 /_-]*?)\s*:\s*(\S+)')
 
 
 def get_edge_ports(sw):
@@ -248,18 +269,28 @@ def get_stp_detail(sw, expected_root_mac=None):
 
     root_mac = re.search(r'CST Root MAC Address\s*:\s*([\w\-:]+)', summary_output)
     if root_mac:
-        current_root = root_mac.group(1).lower()
+        current_root = root_mac.group(1)
         if expected_root_mac:
-            expected_root = expected_root_mac.lower()
-            if current_root != expected_root:
+            # Compare on the normalized form: the switch prints the Aruba
+            # xxxxxx-xxxxxx notation while switches.yaml is documented with the
+            # colon form, so a raw string compare never matched and every run
+            # reported a bogus root-bridge mismatch.
+            expected_norm = normalize_mac(expected_root_mac)
+            if expected_norm is None:
+                warnings.append(f"WARNING: expected_root_mac ({expected_root_mac}) is not a valid "
+                                f"MAC address; skipping the root bridge check.")
+            elif normalize_mac(current_root) != expected_norm:
                 warnings.append(f"WARNING: CST Root MAC ({current_root}) does NOT match "
-                                f"the expected root bridge ({expected_root})!")
+                                f"the expected root bridge ({expected_root_mac})!")
             else:
                 info.append(f"CST Root MAC ({current_root}) matches the expected root bridge.")
         else:
             # Fallback: check if switch itself is root
             bridge_mac = re.search(r'(?:Switch|Bridge) MAC Address\s*:\s*([\w\-:]+)', summary_output)
-            if bridge_mac and current_root != bridge_mac.group(1).lower():
+            if not bridge_mac:
+                info.append(f"CST Root MAC: {current_root} (switch MAC not reported; "
+                            f"cannot tell whether this switch is the root)")
+            elif normalize_mac(current_root) != normalize_mac(bridge_mac.group(1)):
                 warnings.append(f"Notice: Switch is not root. CST Root MAC: {current_root}")
             else:
                 info.append("This switch IS the Root Bridge")
@@ -280,10 +311,12 @@ def get_stp_detail(sw, expected_root_mac=None):
             continue
 
         # Extract boolean/status values
-        for key, label in _STP_PORT_FLAGS.items():
-            m_flag = re.match(rf'.*{label}\s*:\s*(Yes|No)', line, re.IGNORECASE)
-            if m_flag:
-                port_data[current_port][key] = m_flag.group(1)
+        m_kv = _STP_KV_RE.match(line)
+        if m_kv:
+            key = _STP_FLAG_BY_LABEL.get(re.sub(r'\s+', '', m_kv.group(1)).lower())
+            value = m_kv.group(2).capitalize()
+            if key and value in ('Yes', 'No'):
+                port_data[current_port][key] = value
 
     # Analyze parsed port data
     for port, data in port_data.items():
@@ -292,10 +325,8 @@ def get_stp_detail(sw, expected_root_mac=None):
             warnings.append(f"Port {port}: Configured as Edge (Admin) but operating as "
                             f"Non-Edge (BPDUs received!)")
 
-        active_guards = []
-        for guard in ('root_guard', 'tcn_guard', 'bpdu_protect', 'loop_guard'):
-            if data.get(guard) == 'Yes':
-                active_guards.append(guard.replace('_', ' ').title())
+        active_guards = [_STP_PORT_FLAGS[guard] for guard in _STP_GUARDS
+                         if data.get(guard) == 'Yes']
 
         if active_guards:
             info.append(f"Port {port} active guards: {', '.join(active_guards)}")
@@ -315,10 +346,127 @@ def get_stp_detail(sw, expected_root_mac=None):
     return '\n'.join(result)
 
 
+#: DDM alarm thresholds. Rx floor is the receive sensitivity shared by the
+#: 1000SX / 10GBASE-SR optics these switches carry; below it a link is running
+#: on no optical margin and is about to start erroring. Temperature and supply
+#: voltage are the SFP MSA operating limits.
+SFP_RX_LOW_DBM = -17.0
+SFP_TEMP_HIGH_C = 70.0
+SFP_VOLTAGE_RANGE = (3.0, 3.6)
+
+#: "Transceiver in 1/21" starts a block; the metrics follow as "Label : value".
+_SFP_BLOCK_RE = re.compile(r'^\s*Transceiver in (\S+)', re.IGNORECASE)
+_SFP_KV_RE = re.compile(r'^\s*([A-Za-z][A-Za-z ]*?)\s*:\s*(.+?)\s*$')
+
+#: Explicit, non-default port settings. running-config records only what was
+#: configured away from the default, so a hit here IS a pinned setting.
+_PINNED_SETTING_RE = re.compile(r'^\s*(speed-duplex|mdix-mode)\s+(\S+)', re.IGNORECASE)
+_CONFIG_INTERFACE_RE = re.compile(r'^\s*interface\s+(\S+)', re.IGNORECASE)
+
+
+def _parse_transceivers(output):
+    """Parse "show interfaces transceiver detail" into {port: {label: value}}.
+
+    The switches emit a multi-line block per transceiver ("Transceiver in 1/21",
+    then an indented "Status" section). The previous parser expected a single
+    tabular line per SFP, a layout this hardware never produces, so it always
+    concluded there were no diagnostics at all.
+    """
+    blocks = {}
+    current = None
+    for line in output.splitlines():
+        m_block = _SFP_BLOCK_RE.match(line)
+        if m_block:
+            current = m_block.group(1)
+            blocks[current] = {}
+            continue
+        if current is None:
+            continue
+        m_kv = _SFP_KV_RE.match(line)
+        if m_kv:
+            blocks[current][m_kv.group(1).strip().lower()] = m_kv.group(2).strip()
+    return blocks
+
+
+def _sfp_number(raw, unit):
+    """Pull the leading number off a DDM value such as "30.562C" or "0.33mW, -4.78dBm"."""
+    if not raw:
+        return None
+    m = re.search(rf'(-?\d+(?:\.\d+)?)\s*{unit}', raw)
+    return float(m.group(1)) if m else None
+
+
+def _check_transceivers(output, warnings, info):
+    if 'Invalid input' in output or 'does not support' in output:
+        info.append("SFP DDM Diagnostics (show interfaces transceiver detail) "
+                    "not supported on this switch.")
+        return
+
+    blocks = _parse_transceivers(output)
+    if not blocks:
+        info.append("No active SFP physical diagnostics found.")
+        return
+
+    for port, data in sorted(blocks.items()):
+        temp = _sfp_number(data.get('temperature'), 'C')
+        volt = _sfp_number(data.get('voltage'), 'V')
+        tx_dbm = _sfp_number(data.get('tx power'), 'dBm')
+        rx_dbm = _sfp_number(data.get('rx power'), 'dBm')
+
+        if temp is None and volt is None and rx_dbm is None:
+            # A transceiver without DOM support still gets a block.
+            info.append(f"SFP on {port}: {data.get('type', 'unknown type')} "
+                        f"({data.get('model', 'unknown model')}), no DDM data")
+            continue
+
+        metrics = []
+        if tx_dbm is not None:
+            metrics.append(f"Tx={tx_dbm}dBm")
+        if rx_dbm is not None:
+            metrics.append(f"Rx={rx_dbm}dBm")
+        if temp is not None:
+            metrics.append(f"Temp={temp}C")
+        if volt is not None:
+            metrics.append(f"Vcc={volt}V")
+        info.append(f"SFP on {port} ({data.get('type', '?')}): {', '.join(metrics)}")
+
+        if rx_dbm is not None and rx_dbm < SFP_RX_LOW_DBM:
+            warnings.append(f"Port {port}: SFP receive power {rx_dbm}dBm is below the "
+                            f"{SFP_RX_LOW_DBM}dBm sensitivity floor (dirty or failing fiber)!")
+        if temp is not None and temp > SFP_TEMP_HIGH_C:
+            warnings.append(f"Port {port}: SFP temperature {temp}C exceeds "
+                            f"{SFP_TEMP_HIGH_C}C!")
+        if volt is not None and not SFP_VOLTAGE_RANGE[0] <= volt <= SFP_VOLTAGE_RANGE[1]:
+            warnings.append(f"Port {port}: SFP supply voltage {volt}V is outside "
+                            f"{SFP_VOLTAGE_RANGE[0]}-{SFP_VOLTAGE_RANGE[1]}V!")
+
+
+def _check_pinned_settings(config, info):
+    """Report ports with speed/duplex or MDI-X pinned in the running-config.
+
+    This replaces a check that read the "MDI Mode" column of `show interface
+    brief`. That column reports the mode a link NEGOTIATED, not the mode that
+    was configured, so it read MDI/MDIX on essentially every connected port and
+    flagged them all as anomalies — 30 of 40 ports on the switch it was tested
+    against, none of which had anything pinned.
+    """
+    current_port = None
+    for line in config.splitlines():
+        m_int = _CONFIG_INTERFACE_RE.match(line)
+        if m_int:
+            current_port = m_int.group(1)
+            continue
+        m_set = _PINNED_SETTING_RE.match(line)
+        if m_set and current_port:
+            info.append(f"Port {current_port}: {m_set.group(1).lower()} pinned to "
+                        f"{m_set.group(2)} (auto-negotiation disabled)")
+
+
 def check_physical(sw):
-    """Detects physical layer anomalies: speed/duplex, MDIX, and reads SFP DDM."""
+    """Detects physical layer anomalies: speed/duplex, pinned settings, SFP DDM."""
     output_int_brief = sw.run('show interface brief')
     output_transceiver = sw.run('show interfaces transceiver detail')
+    output_config = sw.run('show running-config', timeout=120)
 
     warnings = []
     info = []
@@ -326,40 +474,25 @@ def check_physical(sw):
     # Analyze interface brief
     for line in output_int_brief.splitlines():
         # Match lines like: 1/1  100/1000T  | Yes  Yes  Up   100FDx MDI   off  0
-        m = re.match(r'^\s*([\w/]+)\s+.*?(Up|Down|Drop)\s+(\w+)\s+(MDIX|MDI|MDIX-?)', line)
+        m = re.match(r'^\s*([\w/]+)\s+.*?(Up|Down|Drop)\s+(\w+)\s+(MDIX|MDI|Auto)', line)
         if m:
-            port, status, speed_mode, mdix = m.groups()
+            port, status, speed_mode, _mdix = m.groups()
 
             if status == 'Up':
                 if 'HDx' in speed_mode:
                     warnings.append(f"Port {port}: Operating in Half-Duplex ({speed_mode})!")
-                elif speed_mode in ('10', '100'):
-                    # Could be a mismatch if gigabit was expected, but '100FDx' is
-                    # common for old printers. Informational only.
-                    info.append(f"Port {port}: Operating at {speed_mode}")
+                else:
+                    # The Mode column is a speed+duplex word such as "1000FDx",
+                    # never a bare "10"/"100"; matching the whole word against
+                    # those made this branch unreachable.
+                    m_speed = re.match(r'(\d+)', speed_mode)
+                    if m_speed and int(m_speed.group(1)) < 1000:
+                        # Could be a mismatch if gigabit was expected, but 100FDx
+                        # is common for old printers. Informational only.
+                        info.append(f"Port {port}: Operating below gigabit ({speed_mode})")
 
-                if mdix in ('MDI', 'MDIX') and 'Auto' not in line:
-                    info.append(f"Port {port}: non-Auto MDI/MDIX ({mdix})")
-
-    # Analyze transceiver detail (SFP DDM)
-    if 'Invalid input' in output_transceiver or 'does not support' in output_transceiver:
-        info.append("SFP DDM Diagnostics (show interfaces transceiver detail) not supported on this switch.")
-    else:
-        # Example: 1/A1     0.0000mW   0.0000mW   0.00mA   0.000V   0.000C
-        # We look for alarms/warnings (usually indicated by asterisks or explicit text)
-        ddm_found = False
-        for line in output_transceiver.splitlines():
-            m = re.match(
-                r'^\s*([\w/]+)\s+([0-9.]+m?W)\s+([0-9.]+m?W)\s+([0-9.]+mA)'
-                r'\s+([0-9.]+V)\s+([0-9.]+C)', line)
-            if m:
-                ddm_found = True
-                port = m.group(1)
-                # Just report metrics for active SFPs
-                info.append(f"SFP on {port}: Tx={m.group(2)}, Rx={m.group(3)}, Temp={m.group(6)}")
-
-        if not ddm_found:
-            info.append("No active SFP physical diagnostics found.")
+    _check_pinned_settings(output_config, info)
+    _check_transceivers(output_transceiver, warnings, info)
 
     result = []
     if warnings:
@@ -441,18 +574,24 @@ def analyze_logs(sw):
                             f"({len(recent_flaps)} state changes in the last 24h)")
 
     # Analyze Config vs Outages
-    # Look for ports going offline within X minutes after a config change
+    # Look for ports going offline within X minutes after a config change.
+    # Only the FIRST outage per (port, config change) is reported: a flapping
+    # port produces one line per off-line event otherwise, and the resulting
+    # wall of near-identical alerts buries everything else in the report.
     for config_time in config_changes:
         for port, events in port_flaps.items():
-            for event_time, event_type in events:
-                if event_type == 'off-line':
-                    delta = (event_time - config_time).total_seconds()
-                    # If port went offline between 0 and 300 seconds (5 min) after config change
-                    if 0 <= delta <= 300:
-                        warnings.append(
-                            f"CORRELATION ALERT: Port {port} went off-line {int(delta)}s "
-                            f"after configuration change at "
-                            f"{config_time.strftime('%H:%M:%S')}!")
+            deltas = [(event_time - config_time).total_seconds()
+                      for event_time, event_type in events if event_type == 'off-line']
+            # 0..300s (5 min) after the change
+            following = [d for d in deltas if 0 <= d <= 300]
+            if not following:
+                continue
+            suffix = (f" (+{len(following) - 1} more outage(s) in the same window)"
+                      if len(following) > 1 else "")
+            warnings.append(
+                f"CORRELATION ALERT: Port {port} went off-line {int(min(following))}s "
+                f"after configuration change at "
+                f"{config_time.strftime('%H:%M:%S')}!{suffix}")
 
     result = []
     if warnings:

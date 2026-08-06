@@ -117,10 +117,16 @@ def _find_rogues(sw, args):
 
 
 def _resolve_target(nmap_db, target):
-    """Look up an nmap host by IP, MAC or hostname."""
+    """Look up an nmap host by IP, MAC or hostname.
+
+    MAC detection goes through normalize_mac so every notation the tool itself
+    prints is accepted. The previous check required a separator at index 2,
+    which rejected the Aruba xxxxxx-xxxxxx form shown by `netaudit macs` — so
+    copying a MAC out of one command and into `port find` never resolved.
+    """
     if re.match(r'^\d+\.\d+\.\d+\.\d+$', target):
         return nmap_db.host_by_ip(target)
-    if re.match(r'^[0-9a-fA-F]{2}[:\-]', target):
+    if normalize_mac(target):
         return nmap_db.host_by_mac(target)
     target_lower = target.lower()
     return next((h for h in nmap_db.all_hosts() if h['hostname'].lower() == target_lower), None)
@@ -132,7 +138,9 @@ def _find_host(sw, args, target):
         print("Error: no nmap DB available.", file=sys.stderr)
         print("Specify --nmap-db <path> or set the NETAUDIT_NMAP_DB environment variable.",
               file=sys.stderr)
-        return
+        # Exit non-zero: this is a failure, and returning 0 made it invisible to
+        # any script that checks the status code.
+        sys.exit(1)
 
     host = _resolve_target(nmap_db, target)
     if not host:

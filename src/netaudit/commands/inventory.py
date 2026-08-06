@@ -64,7 +64,9 @@ def cmd_inventory(sw, args):
         print("Specify --nmap-db <path> or set the NETAUDIT_NMAP_DB environment variable.",
               file=sys.stderr)
         print("Searched for: nmap-output.xml in the current directory.", file=sys.stderr)
-        return
+        # Exit non-zero: this is a failure, and returning 0 made it invisible to
+        # any script that checks the status code.
+        sys.exit(1)
 
     hosts = nmap_db.all_hosts()
 

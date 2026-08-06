@@ -69,7 +69,9 @@ COMMANDS = [
         name='physical-check',
         handler=cmd_physical_check,
         help='Physical layer anomaly detection',
-        description='Detects speed/duplex mismatches, non-Auto MDI/MDIX, and reads SFP DDM metrics.',
+        description='Detects half-duplex and below-gigabit links, ports with speed-duplex or\n'
+                    'mdix-mode pinned in the running-config, and reads SFP DDM metrics\n'
+                    '(receive power, temperature, supply voltage) with alarm thresholds.',
     ),
     Command(
         name='query',

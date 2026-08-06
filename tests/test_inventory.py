@@ -1,3 +1,6 @@
+import pytest
+
+from netaudit.cli import build_parser
 from netaudit.commands.inventory import filter_hosts, matches_os
 
 from .conftest import host
@@ -38,3 +41,16 @@ def test_filter_hosts_combines_os_and_service():
 
 def test_filter_hosts_without_filters_is_a_passthrough():
     assert filter_hosts(HOSTS) == HOSTS
+
+
+def test_inventory_exits_nonzero_without_an_nmap_db(monkeypatch, capsys):
+    """Missing DB is a failure: returning 0 hid it from any calling script."""
+    from netaudit.commands import inventory as inv
+    monkeypatch.setattr(inv, 'get_nmap_db', lambda args: None)
+
+    args = build_parser().parse_args(['inventory'])
+    with pytest.raises(SystemExit) as exc:
+        inv.cmd_inventory(None, args)
+
+    assert exc.value.code == 1
+    assert 'no nmap DB available' in capsys.readouterr().err
