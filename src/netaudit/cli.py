@@ -100,12 +100,12 @@ def run_command(command, args):
         command.handler(None, args)
         return
 
-    conn = resolve_switch(args)
+    conn, meta = resolve_switch(args)
     quiet = args.csv
 
     if not quiet:
         print(f"Connecting to {conn['host']}...")
-    with Switch(**conn) as sw:
+    with Switch(**conn, meta=meta) as sw:
         if not quiet:
             print(f"Connected to {sw.hostname}\n")
         command.handler(sw, args)

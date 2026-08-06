@@ -14,6 +14,11 @@ DEFAULT_SWITCHES_PATHS = (
     os.path.expanduser('~/.config/netaudit/switches.yaml'),
 )
 
+#: Inventory keys that configure the SSH connection. Every other key in a
+#: switches.yaml entry is inventory metadata (model, location,
+#: expected_root_mac, ...) and is carried alongside the connection instead.
+CONNECTION_KEYS = ('host', 'user', 'password', 'device_type')
+
 _nmap_db_cache = None
 
 
@@ -58,22 +63,37 @@ def load_switches(args):
     return data['switches'] or {}
 
 
+def split_switch_entry(entry):
+    """Split a switches.yaml entry into (connection kwargs, inventory metadata).
+
+    Keeping the two apart is what lets metadata reach the commands that need it:
+    folding everything into the connection kwargs meant Switch.__init__ swallowed
+    keys like expected_root_mac in **kwargs and no command could ever read them.
+    """
+    conn = {k: v for k, v in entry.items() if k in CONNECTION_KEYS}
+    meta = {k: v for k, v in entry.items() if k not in CONNECTION_KEYS}
+    return conn, meta
+
+
 def resolve_switch(args):
-    """Return connection kwargs from --switch or --host/--user/--password."""
+    """Return (connection kwargs, metadata) from --switch or --host/--user/--password.
+
+    The --host form carries no inventory, so its metadata is always empty.
+    """
     if args.switch:
         switches = load_switches(args)
         if args.switch not in switches:
             print(f"Error: switch '{args.switch}' not found in the inventory.", file=sys.stderr)
             print(f"Available switches: {', '.join(switches)}", file=sys.stderr)
             sys.exit(1)
-        return switches[args.switch]
+        return split_switch_entry(switches[args.switch])
 
     if args.host:
         if not args.user:
             print("Error: --host requires --user. Add --password if public key auth is not configured.",
                   file=sys.stderr)
             sys.exit(1)
-        return {'host': args.host, 'user': args.user, 'password': args.password}
+        return {'host': args.host, 'user': args.user, 'password': args.password}, {}
 
     print("Error: specify either --switch <name> or --host/--user/--password", file=sys.stderr)
     sys.exit(1)

@@ -21,7 +21,7 @@ def cmd_stp(sw, args):
     if action == 'check':
         print(diagnostics.check_stp_health(sw))
     elif action == 'detail':
-        print(diagnostics.get_stp_detail(sw, sw._params.get('expected_root_mac')))
+        print(diagnostics.get_stp_detail(sw, sw.meta.get('expected_root_mac')))
     else:
         print(diagnostics.get_spanning_tree(sw))
 

@@ -34,17 +34,33 @@ def switches_file(tmp_path):
     return str(path)
 
 
-def test_resolve_switch_returns_the_inventory_entry(switches_file):
-    conn = config.resolve_switch(Args(switch='core', switches_file=switches_file))
+def test_split_switch_entry_keeps_metadata_out_of_connection_kwargs():
+    conn, meta = config.split_switch_entry({
+        'host': '10.0.0.1', 'user': 'admin', 'password': 'p',
+        'device_type': 'hp_procurve', 'model': 'HP 2530', 'expected_root_mac': 'aa:bb',
+    })
+
+    assert conn == {'host': '10.0.0.1', 'user': 'admin', 'password': 'p',
+                    'device_type': 'hp_procurve'}
+    assert meta == {'model': 'HP 2530', 'expected_root_mac': 'aa:bb'}
+
+
+def test_resolve_switch_returns_metadata_from_inventory(switches_file):
+    conn, meta = config.resolve_switch(Args(switch='core', switches_file=switches_file))
 
     assert conn['host'] == '192.168.1.100'
     assert conn['device_type'] == 'aruba_osswitch'
+    # expected_root_mac used to be swallowed by **kwargs and never reached the
+    # stp detail command.
+    assert meta['expected_root_mac'] == '00:11:22:33:44:55'
+    assert meta['location'] == 'Server Room'
 
 
-def test_resolve_switch_from_host_flags():
-    conn = config.resolve_switch(Args(host='10.0.0.1', user='admin', password='p'))
+def test_resolve_switch_from_host_flags_has_no_metadata():
+    conn, meta = config.resolve_switch(Args(host='10.0.0.1', user='admin', password='p'))
 
     assert conn == {'host': '10.0.0.1', 'user': 'admin', 'password': 'p'}
+    assert meta == {}
 
 
 def test_resolve_switch_rejects_host_without_user():

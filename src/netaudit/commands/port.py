@@ -70,7 +70,7 @@ def _host_cells(nmap_db, mac):
 
 
 def _macs_per_port(sw):
-    """Map switch port -> list of normalized MACs learned on it."""
+    """Map switch port -> list of MACs learned on it, in switch format."""
     _, rows = parse_mac_table(diagnostics.get_mac_table(sw))
     per_port = defaultdict(list)
     for row in rows:
@@ -145,15 +145,12 @@ def _find_host(sw, args, target):
     label = host['hostname'] or host['ip']
     print(f"Searching for MAC {host['mac']} ({label}) in the switch MAC table...")
 
-    raw = diagnostics.get_mac_table(sw)
-    mac_re = re.compile(r'^\s+([0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4})\s+(\S+)\s+(\d+)', re.IGNORECASE)
-
-    found = None
-    for line in raw.splitlines():
-        m = mac_re.match(line)
-        if m and normalize_mac(m.group(1)) == host['mac']:
-            found = {'mac': m.group(1), 'port': m.group(2), 'vlan': m.group(3)}
-            break
+    # Parsing goes through parse_mac_table so this shares MAC_ROW_RE with the
+    # rest of the code. A local copy of the row regex used to live here and had
+    # drifted to the Comware xxxx-xxxx-xxxx form, so the lookup silently matched
+    # nothing on the Aruba/ProCurve switches this tool mainly targets.
+    _, rows = parse_mac_table(diagnostics.get_mac_table(sw))
+    found = next((row for row in rows if normalize_mac(row['mac']) == host['mac']), None)
 
     if not found:
         print(f"\nMAC {host['mac']} ({label}) not found in the switch MAC table.")

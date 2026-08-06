@@ -7,9 +7,12 @@ from netmiko import ConnectHandler
 class Switch:
     """Multi-vendor wrapper around netmiko ConnectHandler."""
 
-    def __init__(self, host, user, password=None, device_type='aruba_osswitch', **kwargs):
+    def __init__(self, host, user, password=None, device_type='aruba_osswitch', meta=None):
         self.host = host
         self.hostname = None
+        #: Inventory metadata for this switch (model, location,
+        #: expected_root_mac, ...). Read by the commands that need it.
+        self.meta = meta or {}
         self._params = {
             'device_type': device_type,
             'host': host,
