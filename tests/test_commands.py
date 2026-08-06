@@ -6,6 +6,7 @@ import pytest
 
 from netaudit import diagnostics
 from netaudit.cli import build_parser
+from netaudit.commands import REGISTRY
 from netaudit.commands import port as port_cmd
 from netaudit.commands import stp as stp_cmd
 
@@ -204,3 +205,47 @@ def test_find_rogues_csv_stays_quiet_and_emits_one_row_per_mac(monkeypatch, use_
     assert lines[0] == 'Switch Port,MAC Address,IP,Hostname,Vendor,OS'
     assert len(lines) == 3
     assert lines[1].startswith('1/23,0001c0-17da89,10.0.0.5,DESKTOP-A')
+
+
+@pytest.mark.parametrize('argv', [
+    ['port', 'find', '10.0.0.5', '--csv'],
+    ['port', 'find', '--rogue', '--csv'],
+    ['port', 'set-name', '2/24', 'x', '--yes'],
+])
+def test_port_rejects_global_flags_written_after_the_subcommand(argv, capsys):
+    """argparse.REMAINDER hands these to `port` instead of parsing them, so they
+    used to be accepted and silently ignored."""
+    args = build_parser().parse_args(['--switch', 'core'] + argv)
+    with pytest.raises(SystemExit):
+        REGISTRY['port'].validate(args)
+
+    assert 'Global flags go before the sub-command' in capsys.readouterr().err
+
+
+def test_port_still_accepts_its_own_rogue_flag():
+    args = build_parser().parse_args(['--switch', 'core', 'port', 'find', '--rogue'])
+    REGISTRY['port'].validate(args)
+
+
+def test_confirm_without_a_terminal_refuses_instead_of_crashing(monkeypatch, capsys):
+    """input() raises EOFError under cron or a pipe; that used to surface as a
+    traceback. It must fail closed, never fall through to yes."""
+    from netaudit import modifications
+
+    def no_stdin(_prompt):
+        raise EOFError
+
+    monkeypatch.setattr('builtins.input', no_stdin)
+
+    assert modifications._confirm() is False
+    assert 'stdin is not a terminal' in capsys.readouterr().out
+
+
+def test_confirm_with_yes_never_prompts(monkeypatch):
+    from netaudit import modifications
+
+    def boom(_prompt):
+        raise AssertionError('must not prompt when --yes was given')
+
+    monkeypatch.setattr('builtins.input', boom)
+    assert modifications._confirm(yes=True) is True

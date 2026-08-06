@@ -33,6 +33,9 @@ USAGE = textwrap.dedent("""\
 
 PORT_ACTIONS = ('access', 'tag', 'untag', 'set-name', 'find')
 
+#: The only dash-prefixed tokens `port` accepts after its sub-command.
+PORT_FLAGS = ('--rogue',)
+
 ROGUE_COLUMNS = ('MAC Address', 'IP', 'Hostname', 'Vendor', 'OS')
 
 _WRITE_ACTIONS = {
@@ -200,6 +203,17 @@ def validate_port(args):
         sys.exit(1)
     if port_args[0] not in PORT_ACTIONS:
         print(f"Error: sub-command '{port_args[0]}' not recognized\n\n{USAGE}", file=sys.stderr)
+        sys.exit(1)
+
+    # `port` takes argparse.REMAINDER so that a port name may look like a flag,
+    # which also means argparse hands over any global flag written after the
+    # sub-command instead of parsing it. Those used to be silently ignored:
+    # `port find 10.0.0.5 --csv` produced non-CSV output and said nothing.
+    stray = [a for a in port_args[1:] if a.startswith('-') and a not in PORT_FLAGS]
+    if stray:
+        print(f"Error: {', '.join(stray)} cannot be used after 'port {port_args[0]}'.\n"
+              f"Global flags go before the sub-command, e.g.\n"
+              f"  netaudit --switch core --csv port find --rogue\n\n{USAGE}", file=sys.stderr)
         sys.exit(1)
     if port_args[0] == 'find':
         if len(port_args) < 2 and '--rogue' not in port_args:

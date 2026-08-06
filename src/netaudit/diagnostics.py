@@ -462,11 +462,15 @@ def _check_pinned_settings(config, info):
                         f"{m_set.group(2)} (auto-negotiation disabled)")
 
 
-def check_physical(sw):
-    """Detects physical layer anomalies: speed/duplex, pinned settings, SFP DDM."""
+def check_physical(sw, scan_config=True):
+    """Detects physical layer anomalies: speed/duplex, pinned settings, SFP DDM.
+
+    scan_config pulls the running-config to find ports with speed-duplex or
+    mdix-mode pinned. It is the slowest part of the check by a wide margin, so
+    --no-config turns it off when only the link and optic health is wanted.
+    """
     output_int_brief = sw.run('show interface brief')
     output_transceiver = sw.run('show interfaces transceiver detail')
-    output_config = sw.run('show running-config', timeout=120)
 
     warnings = []
     info = []
@@ -491,7 +495,8 @@ def check_physical(sw):
                         # is common for old printers. Informational only.
                         info.append(f"Port {port}: Operating below gigabit ({speed_mode})")
 
-    _check_pinned_settings(output_config, info)
+    if scan_config:
+        _check_pinned_settings(sw.run('show running-config', timeout=120), info)
     _check_transceivers(output_transceiver, warnings, info)
 
     result = []

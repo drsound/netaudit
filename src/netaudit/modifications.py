@@ -4,7 +4,15 @@ from .diagnostics import get_port_names, get_vlan, get_vlans
 def _confirm(yes=False):
     if yes:
         return True
-    resp = input("Confirm? [y/N]: ").strip().lower()
+    try:
+        resp = input("Confirm? [y/N]: ").strip().lower()
+    except EOFError:
+        # No terminal to answer the prompt (cron, a pipe, stdin closed). Refuse
+        # rather than traceback, and never fall through to "yes": an unattended
+        # run must not apply a change nobody confirmed.
+        print("\nNo input available to confirm (stdin is not a terminal). "
+              "Re-run with --yes to apply without confirmation.")
+        return False
     return resp in ('y', 'yes')
 
 

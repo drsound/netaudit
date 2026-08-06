@@ -420,3 +420,22 @@ def test_negotiated_mdi_mode_is_never_reported_as_an_anomaly():
 
     assert 'MDI' not in out
     assert 'pinned' not in out
+
+
+def test_no_config_skips_the_running_config_scan():
+    """The running-config fetch dominates the runtime, so --no-config must not
+    issue it at all — not merely discard the result."""
+    sw = sfp_switch(config="interface 7\n   speed-duplex 100-half\n   exit\n")
+    issued = []
+    original = sw.run
+    sw.run = lambda cmd, timeout=30: (issued.append(cmd), original(cmd, timeout))[1]
+
+    out = diagnostics.check_physical(sw, scan_config=False)
+
+    assert 'show running-config' not in issued
+    assert 'pinned' not in out
+
+
+def test_scan_config_is_on_by_default():
+    sw = sfp_switch(config="interface 7\n   speed-duplex 100-half\n   exit\n")
+    assert 'speed-duplex pinned to 100-half' in diagnostics.check_physical(sw)

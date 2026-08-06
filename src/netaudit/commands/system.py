@@ -26,7 +26,7 @@ def cmd_log_audit(sw, args):
 
 def cmd_physical_check(sw, args):
     print(f"Running physical layer checks on {sw.hostname}...")
-    print(diagnostics.check_physical(sw))
+    print(diagnostics.check_physical(sw, scan_config=not args.no_config))
 
 
 def cmd_query(sw, args):
@@ -71,7 +71,12 @@ COMMANDS = [
         help='Physical layer anomaly detection',
         description='Detects half-duplex and below-gigabit links, ports with speed-duplex or\n'
                     'mdix-mode pinned in the running-config, and reads SFP DDM metrics\n'
-                    '(receive power, temperature, supply voltage) with alarm thresholds.',
+                    '(receive power, temperature, supply voltage) with alarm thresholds.\n\n'
+                    'Reading the running-config dominates the runtime; --no-config skips it\n'
+                    'and reports only link and optic health.',
+        add_arguments=lambda p: p.add_argument(
+            '--no-config', action='store_true',
+            help='Skip the running-config scan for pinned speed-duplex/mdix-mode (faster)'),
     ),
     Command(
         name='query',

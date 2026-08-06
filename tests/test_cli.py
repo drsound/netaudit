@@ -94,3 +94,39 @@ def test_port_validation_rejects_bad_input(argv):
 def test_port_validation_accepts_valid_input(argv):
     args = build_parser().parse_args(['--switch', 'core'] + argv)
     REGISTRY['port'].validate(args)
+
+
+def test_netmiko_failures_are_reported_not_raised(monkeypatch, capsys):
+    """A read timing out or the prompt not matching used to reach the user as a
+    raw traceback."""
+    from netmiko.exceptions import ReadTimeout
+
+    from netaudit import cli
+
+    def boom(command, args):
+        raise ReadTimeout("Pattern not detected: 'Switch#' in output.\n\nThings you might try:")
+
+    monkeypatch.setattr(cli, 'run_command', boom)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(['--switch', 'core', 'vlans'])
+
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert 'Switch communication error: ReadTimeout' in err
+    assert 'Traceback' not in err
+
+
+def test_connection_errors_are_still_reported(monkeypatch, capsys):
+    from netaudit import cli
+
+    def boom(command, args):
+        raise ConnectionError('all authentication methods failed')
+
+    monkeypatch.setattr(cli, 'run_command', boom)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(['--switch', 'core', 'vlans'])
+
+    assert exc.value.code == 1
+    assert 'all authentication methods failed' in capsys.readouterr().err

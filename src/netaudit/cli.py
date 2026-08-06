@@ -4,6 +4,8 @@ import argparse
 import sys
 import textwrap
 
+from netmiko.exceptions import NetmikoBaseException
+
 from netaudit import __version__
 from netaudit.commands import REGISTRY
 from netaudit.config import resolve_switch
@@ -122,6 +124,15 @@ def main(argv=None):
         run_command(command, args)
     except ConnectionError as e:
         print(f"Connection error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except NetmikoBaseException as e:
+        # Every netmiko failure below the connect step — a read timing out, the
+        # prompt not matching, the session dropping — used to reach the user as
+        # a raw traceback.
+        print(f"Switch communication error: {type(e).__name__}: "
+              f"{str(e).strip().splitlines()[0] if str(e).strip() else e}", file=sys.stderr)
+        print("If the switch is a different platform than device_type says, the command sent "
+              "may not exist on it.", file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
         print("\nInterrupted by user.", file=sys.stderr)
