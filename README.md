@@ -18,26 +18,43 @@
 ## Prerequisites & Installation
 
 **Prerequisites:**
-- Python 3.9+
+- [uv](https://docs.astral.sh/uv/) — `brew install uv`, or `curl -LsSf https://astral.sh/uv/install.sh | sh`
 - Network access to the management interfaces of your networking equipment.
+
+You do not need to install Python yourself: uv provisions the interpreter pinned in
+`.python-version`, independently of whatever Python the operating system ships.
 
 **Installation:**
 ```bash
 git clone https://github.com/your-username/netaudit.git
 cd netaudit
 
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e .
+uv sync
 ```
 
-`pip install -e .` reads the dependency list from `pyproject.toml`, installs it, and
-puts the `netaudit` command on your `PATH`. The `-e` (editable) flag keeps the code
-in the clone, so edits take effect without reinstalling — drop it for a plain install.
+`uv sync` reads `pyproject.toml`, resolves against the committed `uv.lock`, creates
+`.venv/` and installs the project into it — no virtualenv to activate by hand. Run
+anything through `uv run`:
+
+```bash
+uv run netaudit --switch core_switch vlans
+```
+
+To get a bare `netaudit` command on your `PATH` instead, symlink the entry point the
+install generated (its shebang points at the venv interpreter, so it works from any
+directory):
+
+```bash
+ln -sf "$PWD/.venv/bin/netaudit" /usr/local/bin/netaudit
+```
+
+For deployment on a server, see [DEPLOY.md](DEPLOY.md).
 
 > **Do not install the dependencies by hand.** `paramiko` must stay on the 3.x line:
 > version 4.0 removed the SHA-1 `ssh-rsa` algorithm that the Mocana SSH stack on
-> Aruba/HP switches requires for key authentication. `pyproject.toml` pins it; a
-> manual `pip install netmiko paramiko` does not. See [Troubleshooting](#troubleshooting).
+> Aruba/HP switches requires for key authentication. `pyproject.toml` pins it and
+> `uv.lock` freezes it at an exact version; a manual `pip install netmiko paramiko`
+> does neither. See [Troubleshooting](#troubleshooting).
 
 ---
 
@@ -242,23 +259,37 @@ netaudit/
 ```
 
 Adding a command means adding a `Command(...)` entry to the relevant module in
-`netaudit/commands/`; `cli.py` builds the parser by walking the registry, so no
+`src/netaudit/commands/`; `cli.py` builds the parser by walking the registry, so no
 central list needs updating.
 
 ## Development
 
 ```bash
-pip install -e ".[dev]"
-pytest          # test suite
-ruff check .    # lint
+uv sync                  # environment + dev dependencies, from uv.lock
+uv run pytest            # test suite
+uv run ruff check .      # lint
 ```
+
+Dependency changes go through uv so that `pyproject.toml` and `uv.lock` stay in step:
+
+```bash
+uv add <package>         # runtime dependency
+uv add --dev <package>   # development-only dependency
+uv lock --upgrade        # refresh the lockfile deliberately
+```
+
+Never hand-edit `uv.lock`, and commit it with the change that caused it.
+
+The package lives under `src/`, so the copy under test is always the installed one —
+imports cannot silently succeed just because the repository root happens to be the
+working directory.
 
 ## Troubleshooting
 
 **`An RSA key was specified, but no RSA pubkey algorithms are configured!`**
 You are on paramiko 4.x. Aruba/HP switches run Mocana SSH 6.3, which only signs
 user authentication with the legacy SHA-1 `ssh-rsa` algorithm; paramiko 4.0 removed
-it. Reinstall with `pip install -e .` so the `paramiko>=3.4,<4` pin applies.
+it. Re-sync with `uv sync` so the exact version recorded in `uv.lock` is restored.
 
 **`No route to host` / `TCP connection to device failed` on macOS, but `ssh` works**
 On macOS 15+ Local Network access is granted to the *app* that owns the terminal

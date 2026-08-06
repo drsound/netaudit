@@ -8,6 +8,10 @@ version = "0.2.0"
 description = "Network switch diagnostic and management tool (multi-vendor via netmiko)"
 readme = "README.md"
 license = { file = "LICENSE" }
+# Compatibility floor for the source code. Deliberately lower than the
+# interpreter in .python-version: that file pins the version uv provisions for
+# development and deployment, while this keeps the package installable on the
+# older system Python found on some client servers.
 requires-python = ">=3.9"
 dependencies = [
     "netmiko>=4.0",       # multi-vendor SSH driver (pulls in ntc-templates, textfsm, ...)
@@ -25,7 +29,7 @@ dependencies = [
 #     "An RSA key was specified, but no RSA pubkey algorithms are configured!"
 # Paramiko 3.5.x still ships ssh-rsa and authenticates against these switches.
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest>=7.0",
     "ruff>=0.4",
@@ -35,7 +39,7 @@ dev = [
 netaudit = "netaudit.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["netaudit"]
+packages = ["src/netaudit"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
