@@ -1,4 +1,5 @@
 import re
+
 import paramiko
 from netmiko import ConnectHandler
 
@@ -34,6 +35,10 @@ class Switch:
         except Exception:
             pass
 
+        # Every attempt is recorded: reporting only the last one would hide the
+        # error that actually matters (e.g. a wrong password behind an unrelated
+        # pubkey failure).
+        failures = []
         last_exc = None
         for pkey in agent_keys:
             try:
@@ -44,14 +49,25 @@ class Switch:
                 return
             except Exception as e:
                 last_exc = e
+                failures.append(f"agent key {pkey.get_name()}: {e}")
 
         # Fallback: password authentication (no agent keys available
         # or no key accepted by the switch)
-        try:
-            self._conn = ConnectHandler(**self._params)
-            self.hostname = self._conn.base_prompt
-        except Exception as e:
-            raise ConnectionError(str(last_exc or e)) from (last_exc or e)
+        if self._params['password']:
+            try:
+                self._conn = ConnectHandler(**self._params)
+                self.hostname = self._conn.base_prompt
+                return
+            except Exception as e:
+                last_exc = e
+                failures.append(f"password: {e}")
+        else:
+            failures.append('password: no password configured')
+
+        detail = '\n  '.join(f.replace('\n', ' ').strip() for f in failures)
+        raise ConnectionError(
+            f"all authentication methods failed:\n  {detail}"
+        ) from last_exc
 
     def close(self):
         if self._conn:

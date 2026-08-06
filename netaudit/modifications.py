@@ -1,4 +1,4 @@
-from .diagnostics import get_vlan, get_vlans, get_running_config, get_port_names
+from .diagnostics import get_port_names, get_vlan, get_vlans
 
 
 def _confirm(yes=False):

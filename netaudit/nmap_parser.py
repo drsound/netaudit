@@ -1,4 +1,4 @@
-"""Parser per file XML nmap — database di inventario rete."""
+"""Parser for nmap XML output — network inventory database."""
 
 import os
 import re
@@ -6,7 +6,7 @@ import xml.etree.ElementTree as ET
 
 
 def normalize_mac(mac):
-    """Normalizza un MAC address in formato lowercase colon-separated (aa:bb:cc:dd:ee:ff)."""
+    """Normalize a MAC address to lowercase colon-separated form (aa:bb:cc:dd:ee:ff)."""
     if not mac:
         return None
     digits = re.sub(r'[:\-\.]', '', mac).lower()
@@ -148,20 +148,20 @@ class NmapDB:
         """Format host services into a compact comma-separated string."""
         if not host.get('services'):
             return ""
-        
+
         # Format: 22/tcp(ssh), 80/tcp(http)
         svc_strings = []
         for svc in host['services']:
             name = svc.get('name', 'unknown')
             svc_strings.append(f"{svc['port']}/{svc['proto']}({name})")
-        
+
         # Sort by port number
         svc_strings.sort(key=lambda s: int(s.split('/')[0]))
         return ", ".join(svc_strings)
 
     @staticmethod
     def find_db(directory=None):
-        """Cerca nmap-output.xml nella directory specificata (default: directory corrente)."""
+        """Look for nmap-output.xml in the given directory (default: current directory)."""
         if directory is None:
             directory = os.getcwd()
         path = os.path.join(directory, 'nmap-output.xml')

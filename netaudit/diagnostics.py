@@ -1,5 +1,4 @@
 import re
-import os
 from datetime import datetime
 
 
@@ -23,36 +22,38 @@ def get_interface_brief(sw, format_csv=False):
     output = sw.run('show interface brief')
     if not format_csv:
         return output
-        
+
     import csv
     import io
     out = io.StringIO()
     writer = csv.writer(out)
     writer.writerow(['Port', 'Type', 'Enabled', 'Status', 'Mode', 'MDI'])
-    
+
     # Format: 1/1  100/1000T  | No  Yes  Up   100FDx  MDI  off  0
     for line in output.splitlines():
         # Using a more robust regex to split columns around the pipe
-        m = re.match(r'^\s*([\w/]+)\s+([\w/]+)\s+\|\s+(Yes|No)\s+(Yes|No)\s+(Up|Down|Drop)\s+([0-9A-Za-z]+)\s+([0-9A-Za-z\-]+)\s+', line)
+        m = re.match(
+            r'^\s*([\w/]+)\s+([\w/]+)\s+\|\s+(Yes|No)\s+(Yes|No)\s+(Up|Down|Drop)'
+            r'\s+([0-9A-Za-z]+)\s+([0-9A-Za-z\-]+)\s+', line)
         if m:
             port, ptype, alert, enabled, status, mode, mdi = m.groups()
             writer.writerow([port, ptype, enabled, status, mode, mdi])
-            
+
     return out.getvalue().strip()
 
 
 def get_port_names(sw, port=None, format_csv=False):
     output = sw.run('show name')
-    
+
     if format_csv:
         import csv
         import io
         out = io.StringIO()
         writer = csv.writer(out)
         writer.writerow(['Port', 'Type', 'Name/Comment'])
-        
+
         for line in output.splitlines():
-            # Format:  1/1    100/1000T  Server-01 
+            # Format:  1/1    100/1000T  Server-01
             m = re.match(r'^\s*([\w/]+)\s+([\w/]+)\s+(.*)', line)
             if m and not m.group(1).isalpha(): # skip header lines like 'Port'
                 p, t, n = m.groups()
@@ -60,7 +61,7 @@ def get_port_names(sw, port=None, format_csv=False):
                     continue
                 writer.writerow([p, t, n.strip()])
         return out.getvalue().strip()
-        
+
     if port is None:
         return output
     # Filter: return only the header lines + the matching port line
@@ -79,20 +80,20 @@ def get_lldp_neighbors(sw, format_csv=False):
     output = sw.run('show lldp info remote-device')
     if not format_csv:
         return output
-        
+
     import csv
     import io
     out = io.StringIO()
     writer = csv.writer(out)
     writer.writerow(['Local Port', 'Chassis ID', 'Port ID', 'System Name'])
-    
-    # Format: 
-    #   LocalPort | ChassisId          PortId             PortDescr SysName           
+
+    # Format:
+    #   LocalPort | ChassisId          PortId             PortDescr SysName
     #   --------- + ------------------ ------------------ --------- ------------------
     #   1/4       | ec0273-02c200      48                 48        13.29_R3_ARUBA
     in_data = False
     chassis_idx = portid_idx = portdescr_idx = sysname_idx = -1
-    
+
     for line in output.splitlines():
         if not in_data:
             if 'ChassisId' in line and 'PortId' in line:
@@ -103,24 +104,24 @@ def get_lldp_neighbors(sw, format_csv=False):
             elif re.match(r'^\s*-+\s*\+\s*-+', line):
                 in_data = True
             continue
-            
+
         if in_data and '|' in line:
             parts = line.split('|', 1)
             local_port = parts[0].strip()
-            
+
             # Missing local_port or end of output
             if not local_port:
                 continue
 
             if chassis_idx > 0 and portid_idx > 0 and sysname_idx > 0:
                 chassis = line[chassis_idx:portid_idx].strip()
-                
+
                 end_port_id = portdescr_idx if portdescr_idx > 0 else sysname_idx
                 port_id = line[portid_idx:end_port_id].strip()
-                
+
                 sys_name = line[sysname_idx:].strip()
                 writer.writerow([local_port, chassis, port_id, sys_name])
-                
+
     return out.getvalue().strip()
 
 
@@ -203,27 +204,58 @@ def check_stp_health(sw):
     return '\n'.join(result)
 
 
+#: Per-port Yes/No flags parsed out of "show spanning-tree detail",
+#: mapped from the key used internally to the label printed by the switch.
+_STP_PORT_FLAGS = {
+    'admin_edge': 'AdminEdgePort',
+    'oper_edge': 'OperEdgePort',
+    'root_guard': 'RootGuard',
+    'tcn_guard': 'TCNGuard',
+    'bpdu_protect': 'BPDUProtection',
+    'loop_guard': 'LoopGuard',
+}
+
+
+def get_edge_ports(sw):
+    """Return the set of ports currently operating as STP edge ports.
+
+    An edge port is expected to face a single end device, which is what makes a
+    multi-MAC edge port a rogue-switch candidate.
+    """
+    output = sw.run('show spanning-tree detail')
+    edge_ports = set()
+    current_port = None
+    for line in output.splitlines():
+        m_port = re.match(r'^\s*Port\s*:\s*([\w/]+)', line)
+        if m_port:
+            current_port = m_port.group(1)
+        elif current_port and re.search(r'OperEdgePort\s*:\s*Yes', line, re.IGNORECASE):
+            edge_ports.add(current_port)
+    return edge_ports
+
+
 def get_stp_detail(sw, expected_root_mac=None):
     """Deep STP analysis parsing per-port details and root bridge MAC."""
     output = sw.run('show spanning-tree detail')
     summary_output = sw.run('show spanning-tree')
-    
+
     warnings = []
     info = []
-    
+
     # Global checks from summary output
     if re.search(r'STP Enabled\s*:\s*No', summary_output, re.IGNORECASE):
         warnings.append("CRITICAL: STP is disabled on this switch!")
-        
+
     root_mac = re.search(r'CST Root MAC Address\s*:\s*([\w\-:]+)', summary_output)
     if root_mac:
         current_root = root_mac.group(1).lower()
         if expected_root_mac:
             expected_root = expected_root_mac.lower()
             if current_root != expected_root:
-                warnings.append(f"WARNING: CST Root MAC ({current_root}) does NOT match expected Centro Stella ({expected_root})!")
+                warnings.append(f"WARNING: CST Root MAC ({current_root}) does NOT match "
+                                f"the expected root bridge ({expected_root})!")
             else:
-                info.append(f"CST Root MAC ({current_root}) matches expected Centro Stella.")
+                info.append(f"CST Root MAC ({current_root}) matches the expected root bridge.")
         else:
             # Fallback: check if switch itself is root
             bridge_mac = re.search(r'(?:Switch|Bridge) MAC Address\s*:\s*([\w\-:]+)', summary_output)
@@ -235,7 +267,7 @@ def get_stp_detail(sw, expected_root_mac=None):
     # Parse port-level detail
     port_data = {}
     current_port = None
-    
+
     for line in output.splitlines():
         # Match port header: " Port: 1/1"
         m_port = re.match(r'^\s*Port\s*:\s*([\w/]+)', line)
@@ -243,36 +275,28 @@ def get_stp_detail(sw, expected_root_mac=None):
             current_port = m_port.group(1)
             port_data[current_port] = {}
             continue
-            
+
         if not current_port:
             continue
-            
+
         # Extract boolean/status values
-        m_admin_edge = re.match(r'.*AdminEdgePort\s*:\s*(Yes|No)', line, re.IGNORECASE)
-        m_oper_edge = re.match(r'.*OperEdgePort\s*:\s*(Yes|No)', line, re.IGNORECASE)
-        m_root_guard = re.match(r'.*RootGuard\s*:\s*(Yes|No)', line, re.IGNORECASE)
-        m_tcn_guard = re.match(r'.*TCNGuard\s*:\s*(Yes|No)', line, re.IGNORECASE)
-        m_bpdu_protect = re.match(r'.*BPDUProtection\s*:\s*(Yes|No)', line, re.IGNORECASE)
-        m_loop_guard = re.match(r'.*LoopGuard\s*:\s*(Yes|No)', line, re.IGNORECASE)
-        
-        if m_admin_edge: port_data[current_port]['admin_edge'] = m_admin_edge.group(1)
-        if m_oper_edge: port_data[current_port]['oper_edge'] = m_oper_edge.group(1)
-        if m_root_guard: port_data[current_port]['root_guard'] = m_root_guard.group(1)
-        if m_tcn_guard: port_data[current_port]['tcn_guard'] = m_tcn_guard.group(1)
-        if m_bpdu_protect: port_data[current_port]['bpdu_protect'] = m_bpdu_protect.group(1)
-        if m_loop_guard: port_data[current_port]['loop_guard'] = m_loop_guard.group(1)
+        for key, label in _STP_PORT_FLAGS.items():
+            m_flag = re.match(rf'.*{label}\s*:\s*(Yes|No)', line, re.IGNORECASE)
+            if m_flag:
+                port_data[current_port][key] = m_flag.group(1)
 
     # Analyze parsed port data
     for port, data in port_data.items():
         # Edge port receiving BPDUs
         if data.get('admin_edge') == 'Yes' and data.get('oper_edge') == 'No':
-            warnings.append(f"Port {port}: Configured as Edge (Admin) but operating as Non-Edge (BPDUs received!)")
-            
+            warnings.append(f"Port {port}: Configured as Edge (Admin) but operating as "
+                            f"Non-Edge (BPDUs received!)")
+
         active_guards = []
         for guard in ('root_guard', 'tcn_guard', 'bpdu_protect', 'loop_guard'):
             if data.get(guard) == 'Yes':
                 active_guards.append(guard.replace('_', ' ').title())
-        
+
         if active_guards:
             info.append(f"Port {port} active guards: {', '.join(active_guards)}")
 
@@ -295,27 +319,28 @@ def check_physical(sw):
     """Detects physical layer anomalies: speed/duplex, MDIX, and reads SFP DDM."""
     output_int_brief = sw.run('show interface brief')
     output_transceiver = sw.run('show interfaces transceiver detail')
-    
+
     warnings = []
     info = []
-    
+
     # Analyze interface brief
     for line in output_int_brief.splitlines():
         # Match lines like: 1/1  100/1000T  | Yes  Yes  Up   100FDx MDI   off  0
         m = re.match(r'^\s*([\w/]+)\s+.*?(Up|Down|Drop)\s+(\w+)\s+(MDIX|MDI|MDIX-?)', line)
         if m:
             port, status, speed_mode, mdix = m.groups()
-            
+
             if status == 'Up':
                 if 'HDx' in speed_mode:
                     warnings.append(f"Port {port}: Operating in Half-Duplex ({speed_mode})!")
                 elif speed_mode in ('10', '100'):
-                    # Could be mismatch if expected gigabit, but '100FDx' is common for old printers. Just info.
+                    # Could be a mismatch if gigabit was expected, but '100FDx' is
+                    # common for old printers. Informational only.
                     info.append(f"Port {port}: Operating at {speed_mode}")
-                    
+
                 if mdix in ('MDI', 'MDIX') and 'Auto' not in line:
                     info.append(f"Port {port}: non-Auto MDI/MDIX ({mdix})")
-                    
+
     # Analyze transceiver detail (SFP DDM)
     if 'Invalid input' in output_transceiver or 'does not support' in output_transceiver:
         info.append("SFP DDM Diagnostics (show interfaces transceiver detail) not supported on this switch.")
@@ -324,16 +349,18 @@ def check_physical(sw):
         # We look for alarms/warnings (usually indicated by asterisks or explicit text)
         ddm_found = False
         for line in output_transceiver.splitlines():
-            m = re.match(r'^\s*([\w/]+)\s+([0-9.]+m?W)\s+([0-9.]+m?W)\s+([0-9.]+mA)\s+([0-9.]+V)\s+([0-9.]+C)', line)
+            m = re.match(
+                r'^\s*([\w/]+)\s+([0-9.]+m?W)\s+([0-9.]+m?W)\s+([0-9.]+mA)'
+                r'\s+([0-9.]+V)\s+([0-9.]+C)', line)
             if m:
                 ddm_found = True
                 port = m.group(1)
                 # Just report metrics for active SFPs
                 info.append(f"SFP on {port}: Tx={m.group(2)}, Rx={m.group(3)}, Temp={m.group(6)}")
-        
+
         if not ddm_found:
             info.append("No active SFP physical diagnostics found.")
-            
+
     result = []
     if warnings:
         result.append("=== PHYSICAL WARNINGS ===")
@@ -352,30 +379,30 @@ def check_physical(sw):
 def analyze_logs(sw):
     """Intelligent log analysis for STP, port flapping, and config events."""
     logs = sw.run('show log -r')
-    
+
     warnings = []
     info = []
-    
+
     # Trackers
     port_flaps = {}  # port -> list of timestamps
     config_changes = []  # timestamps of config saves
     stp_events = []
-    
+
     # 1. First pass: Index events
     for line in logs.splitlines():
         # Example: I 03/08/26 11:34:16 00076 ports: port 1/A1 is now on-line
         m = re.match(r'^[A-Z]\s+(\d{2}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2})\s+\d+\s+(\w+):\s+(.*)', line)
         if not m:
             continue
-            
+
         timestamp_str, module, message = m.groups()
-        
+
         try:
             # Assuming year format is '26' -> 2026. This won't work in 2100 :)
             dt = datetime.strptime(timestamp_str, '%m/%d/%y %H:%M:%S')
         except ValueError:
             continue
-        
+
         # Track Port Flaps (Up/Down)
         if module == 'ports':
             m_port = re.search(r'port ([\w/]+) is now (on-line|off-line)', message)
@@ -385,13 +412,13 @@ def analyze_logs(sw):
                 if port not in port_flaps:
                     port_flaps[port] = []
                 port_flaps[port].append((dt, event_type))
-                
+
         # Track STP changes
         elif module == 'stpm':
             if 'CST Root changed' in message:
                 stp_events.append((dt, line.strip()))
                 warnings.append(f"WARNING [STP]: {line.strip()}")
-                
+
         # Track Configuration changes
         elif module in ('cfgRestore', 'system', 'mgr'):
             if 'configuration changed' in message or 'Write memory' in message:
@@ -399,19 +426,20 @@ def analyze_logs(sw):
                 info.append(f"Config Change: {timestamp_str} - {message}")
 
     # 2. Second pass: Analysis
-    
+
     # Analyze Port Flapping
     # If a port went up and down more than 3 times in the last 24h of logs
     now = datetime.now()
     for port, events in port_flaps.items():
         # Sort chronologically (oldest to newest)
         events.sort(key=lambda x: x[0])
-        
+
         # Count flaps in the last 24h
         recent_flaps = [e for e in events if (now - e[0]).total_seconds() <= 86400]
         if len(recent_flaps) >= 4:  # Up+Down+Up+Down = 4 events
-            warnings.append(f"WARNING: Port {port} is FLAPPING! ({len(recent_flaps)} state changes in the last 24h)")
-            
+            warnings.append(f"WARNING: Port {port} is FLAPPING! "
+                            f"({len(recent_flaps)} state changes in the last 24h)")
+
     # Analyze Config vs Outages
     # Look for ports going offline within X minutes after a config change
     for config_time in config_changes:
@@ -421,7 +449,10 @@ def analyze_logs(sw):
                     delta = (event_time - config_time).total_seconds()
                     # If port went offline between 0 and 300 seconds (5 min) after config change
                     if 0 <= delta <= 300:
-                        warnings.append(f"CORRELATION ALERT: Port {port} went off-line {int(delta)}s after configuration change at {config_time.strftime('%H:%M:%S')}!")
+                        warnings.append(
+                            f"CORRELATION ALERT: Port {port} went off-line {int(delta)}s "
+                            f"after configuration change at "
+                            f"{config_time.strftime('%H:%M:%S')}!")
 
     result = []
     if warnings:

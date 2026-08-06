@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "netaudit"
+version = "0.2.0"
+description = "Network switch diagnostic and management tool (multi-vendor via netmiko)"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+dependencies = [
+    "netmiko>=4.0",       # multi-vendor SSH driver (pulls in ntc-templates, textfsm, ...)
+    "paramiko>=3.4,<4",   # MUST stay on the 3.x line — see the note below
+    "pyyaml>=6.0",        # switches.yaml inventory parsing
+]
+
+# WHY paramiko IS PINNED TO < 4
+#
+# The Aruba/HP switches run Mocana SSH 6.3, which only signs user authentication
+# with the legacy SHA-1 "ssh-rsa" algorithm. Netmiko's HP ProCurve driver knows
+# this and disables rsa-sha2-256/512 (netmiko/hp/hp_procurve.py), relying on
+# paramiko falling back to ssh-rsa. Paramiko 4.0 removed ssh-rsa entirely, so
+# that fallback no longer exists and every key-based login fails with:
+#     "An RSA key was specified, but no RSA pubkey algorithms are configured!"
+# Paramiko 3.5.x still ships ssh-rsa and authenticates against these switches.
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+netaudit = "netaudit.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["netaudit"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]

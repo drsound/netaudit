@@ -1,9 +1,17 @@
 # Virtual environments
 .venv/
+venv/
+
+# Python
 __pycache__/
 *.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
 
-# Local configuration
+# Local configuration (contains switch credentials)
 switches.yaml
 
 # Diagnostic reports
@@ -11,3 +19,6 @@ diagnose_*.txt
 
 # Nmap scan data (potentially sensitive)
 nmap-output.xml
+
+# macOS
+.DS_Store
